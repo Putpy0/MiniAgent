@@ -2,12 +2,17 @@
 
 from miniagent.executor.base import Executor, ExecutionResult
 from miniagent.executor.subprocess_executor import SubprocessExecutor
-from miniagent.executor.permission import PermissionChecker, CommandSafety
+from miniagent.executor.permission import (
+    PermissionChecker,
+    CommandRiskLevel,
+    CommandClassification,
+)
 
 __all__ = [
     "Executor",
     "ExecutionResult",
     "SubprocessExecutor",
     "PermissionChecker",
-    "CommandSafety",
+    "CommandRiskLevel",
+    "CommandClassification",
 ]

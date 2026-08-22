@@ -255,9 +255,141 @@ class PermissionChecker:
             re.compile(pattern, re.IGNORECASE) for pattern in self.DANGEROUS_PATTERNS
         ]
 
+    def _split_compound_command(self, command: str) -> list[str]:
+        """
+        Split a compound command into individual sub-commands.
+
+        FIX 3: This function detects command chaining operators (&&, ;, |, ||)
+        and shell substitution ($(), backticks) to split the command into
+        individual parts for separate safety classification.
+
+        This prevents bypass attempts like:
+          "ls && rm -rf /" or "echo $(cat /etc/passwd)"
+
+        The function carefully handles quoted strings to avoid splitting
+        inside quoted content. It also tracks brace depth for function
+        definitions like fork bombs :(){:|:&};:
+
+        Args:
+            command: The shell command string to split
+
+        Returns:
+            List of individual sub-command strings
+        """
+        if not command:
+            return []
+
+        sub_commands = []
+        current = []
+        i = 0
+        in_single_quote = False
+        in_double_quote = False
+        paren_depth = 0
+        backtick_depth = 0
+        brace_depth = 0  # Track {} for function definitions
+
+        while i < len(command):
+            char = command[i]
+
+            # Handle quote state tracking
+            if char == "'" and not in_double_quote:
+                in_single_quote = not in_single_quote
+                current.append(char)
+            elif char == '"' and not in_single_quote:
+                in_double_quote = not in_double_quote
+                current.append(char)
+            # Handle backticks
+            elif char == "`" and not in_single_quote and not in_double_quote:
+                backtick_depth += 1
+                current.append(char)
+            # Handle $() nesting
+            elif (
+                char == "$"
+                and i + 1 < len(command)
+                and command[i + 1] == "("
+                and not in_single_quote
+                and not in_double_quote
+            ):
+                paren_depth += 1
+                current.append("$(")
+                i += 1  # Skip the next (
+            elif (
+                char == ")"
+                and paren_depth > 0
+                and not in_single_quote
+                and not in_double_quote
+            ):
+                paren_depth -= 1
+                current.append(char)
+            # Track brace depth for function definitions (fork bombs)
+            elif char == "{" and not in_single_quote and not in_double_quote:
+                brace_depth += 1
+                current.append(char)
+            elif char == "}" and not in_single_quote and not in_double_quote:
+                brace_depth -= 1
+                current.append(char)
+            # Check for command separators (only when not in quotes or nested)
+            elif (
+                not in_single_quote
+                and not in_double_quote
+                and paren_depth == 0
+                and backtick_depth == 0
+                and brace_depth == 0  # Don't split inside function body
+            ):
+                # Check for &&
+                if char == "&" and i + 1 < len(command) and command[i + 1] == "&":
+                    if current:
+                        sub_commands.append("".join(current).strip())
+                        current = []
+                    i += 2  # Skip both &
+                    continue
+                # Check for ||
+                elif char == "|" and i + 1 < len(command) and command[i + 1] == "|":
+                    if current:
+                        sub_commands.append("".join(current).strip())
+                        current = []
+                    i += 2  # Skip both |
+                    continue
+                # Check for single | (pipe)
+                elif char == "|":
+                    if current:
+                        sub_commands.append("".join(current).strip())
+                        current = []
+                    i += 1
+                    continue
+                # Check for ; (semicolon)
+                elif char == ";":
+                    if current:
+                        sub_commands.append("".join(current).strip())
+                        current = []
+                    i += 1
+                    continue
+                else:
+                    current.append(char)
+            else:
+                current.append(char)
+
+            i += 1
+
+        # Add remaining content
+        if current:
+            remaining = "".join(current).strip()
+            if remaining:
+                sub_commands.append(remaining)
+
+        return sub_commands
+
     def classify_command(self, command: str) -> CommandClassification:
         """
         Classify a command by risk level.
+
+        FIX 1 & FIX 3: This method now handles compound commands by splitting them
+        and checking each sub-command individually. If ANY sub-command is BLOCKED,
+        the entire command is classified as BLOCKED (cannot be bypassed).
+
+        IMPORTANT: Before splitting, we first check if the full command matches any
+        BLOCKED pattern directly. This ensures fork bombs and similar attacks that
+        might get incorrectly split are still caught.
 
         Args:
             command: The shell command to classify
@@ -267,7 +399,72 @@ class PermissionChecker:
         """
         command_stripped = command.strip()
 
-        # Check blocked patterns first
+        # FIX 1: First check if the FULL command matches any BLOCKED pattern directly
+        # This catches fork bombs and other attacks before any splitting occurs
+        for regex in self._blocked_regexes:
+            if regex.search(command_stripped):
+                return CommandClassification(
+                    risk_level=CommandRiskLevel.BLOCKED,
+                    reason="Command matches blocked pattern (potentially destructive)",
+                    matched_pattern=regex.pattern,
+                )
+
+        # FIX 3: Split compound commands and check each sub-command
+        sub_commands = self._split_compound_command(command_stripped)
+
+        # If we have multiple sub-commands, check each one
+        if len(sub_commands) > 1:
+            highest_risk = CommandRiskLevel.SAFE
+            highest_reason = ""
+            highest_pattern = None
+
+            for sub_cmd in sub_commands:
+                sub_result = self._classify_single_command(sub_cmd)
+
+                # BLOCKED always wins - if any sub-command is blocked, whole command is blocked
+                if sub_result.risk_level == CommandRiskLevel.BLOCKED:
+                    return CommandClassification(
+                        risk_level=CommandRiskLevel.BLOCKED,
+                        reason=f"Compound command contains blocked sub-command: {sub_cmd}",
+                        matched_pattern=sub_result.matched_pattern,
+                    )
+
+                # Track highest risk level for non-blocked commands
+                risk_order = {
+                    CommandRiskLevel.SAFE: 0,
+                    CommandRiskLevel.CAUTION: 1,
+                    CommandRiskLevel.DANGEROUS: 2,
+                }
+                if risk_order.get(sub_result.risk_level, 0) > risk_order.get(highest_risk, 0):
+                    highest_risk = sub_result.risk_level
+                    highest_reason = sub_result.reason
+                    highest_pattern = sub_result.matched_pattern
+
+            return CommandClassification(
+                risk_level=highest_risk,
+                reason=highest_reason,
+                matched_pattern=highest_pattern,
+            )
+
+        # Single command - use direct classification
+        return self._classify_single_command(command_stripped)
+
+    def _classify_single_command(self, command: str) -> CommandClassification:
+        """
+        Classify a single (non-compound) command by risk level.
+
+        This is the internal classification logic that checks patterns
+        without compound command splitting.
+
+        Args:
+            command: A single command string (no &&, ;, |, etc.)
+
+        Returns:
+            CommandClassification with risk level and reason
+        """
+        command_stripped = command.strip()
+
+        # Check blocked patterns first (FIX 1: BLOCKED always checked first)
         for regex in self._blocked_regexes:
             if regex.search(command_stripped):
                 return CommandClassification(
