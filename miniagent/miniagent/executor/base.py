@@ -1,8 +1,9 @@
 """Abstract base class for command executors."""
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 
 @dataclass
@@ -44,16 +45,28 @@ class Executor(ABC):
     security measures including path validation and command restrictions.
     """
 
-    def __init__(self, workspace_root: str, timeout: int = 30):
+    def __init__(
+        self,
+        workspace_root: str,
+        timeout: int = 30,
+        confirmation_callback: Optional[Callable[[str, str], bool]] = None,
+    ):
         """
         Initialize the executor.
 
         Args:
             workspace_root: Root directory for restricted file operations
             timeout: Default timeout in seconds for command execution
+            confirmation_callback: Optional callback for dangerous command confirmation.
+                Signature: callback(command: str, reason: str) -> bool
+                Returns True to allow execution, False to deny.
+                If None, dangerous commands will fail closed (denied by default).
         """
-        self.workspace_root = workspace_root
+        # FIX 4: Cache workspace_root realpath at initialization
+        self._workspace_root_raw = workspace_root
+        self.workspace_root = os.path.realpath(workspace_root)
         self.timeout = timeout
+        self.confirmation_callback = confirmation_callback
 
     @abstractmethod
     def run_command(
