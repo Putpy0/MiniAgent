@@ -7,10 +7,10 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from miniagent.executor.base import Executor, ExecutionResult
-from miniagent.executor.permission import PermissionChecker
+from miniagent.executor.permission import CommandRiskLevel, PermissionChecker
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class SubprocessExecutor(Executor):
     - Command safety classification
     - Timeout enforcement
     - Execution logging for audit trail
-    - User confirmation for dangerous commands
+    - User confirmation for dangerous commands via callback
     """
 
     def __init__(
@@ -33,6 +33,7 @@ class SubprocessExecutor(Executor):
         timeout: int = 30,
         allow_dangerous: bool = False,
         log_file: Optional[str] = None,
+        confirmation_callback: Optional[Callable[[str, str], bool]] = None,
     ):
         """
         Initialize the subprocess executor.
@@ -42,8 +43,12 @@ class SubprocessExecutor(Executor):
             timeout: Default timeout in seconds for command execution
             allow_dangerous: Skip confirmation for dangerous commands (USE WITH CAUTION)
             log_file: Path to execution log file
+            confirmation_callback: Callback for dangerous command confirmation.
+                Signature: callback(command: str, reason: str) -> bool
+                Returns True to allow, False to deny.
+                If None, dangerous commands will fail closed (denied by default).
         """
-        super().__init__(workspace_root, timeout)
+        super().__init__(workspace_root, timeout, confirmation_callback)
         self.permission_checker = PermissionChecker(allow_dangerous=allow_dangerous)
         self.log_file = log_file
         self._ensure_workspace_exists()
@@ -85,24 +90,27 @@ class SubprocessExecutor(Executor):
         cwd: Optional[str] = None,
         timeout: Optional[int] = None,
         shell: bool = False,
-        require_confirmation: bool = True,
     ) -> ExecutionResult:
         """
         Execute a shell command with security checks.
+
+        FIX 1 & FIX 2: This method now properly handles BLOCKED vs DANGEROUS commands:
+        - BLOCKED commands always raise PermissionError (cannot be bypassed)
+        - DANGEROUS commands use the confirmation_callback for user approval
+          If no callback is set, dangerous commands fail closed (denied by default)
 
         Args:
             command: Command to execute
             cwd: Working directory (must be within workspace)
             timeout: Timeout in seconds (overrides default)
             shell: Whether to run through shell (default False)
-            require_confirmation: Whether to require user confirmation for dangerous commands
 
         Returns:
             ExecutionResult with output and metadata
 
         Raises:
             ValueError: If path validation fails
-            PermissionError: If command requires confirmation
+            PermissionError: If command is blocked or denied by confirmation callback
             TimeoutError: If command exceeds timeout
         """
         # Validate working directory
@@ -114,22 +122,38 @@ class SubprocessExecutor(Executor):
         else:
             validated_cwd = self.workspace_root
 
-        # Check command safety
-        if require_confirmation:
-            classification = self.permission_checker.classify_command(command)
+        # FIX 1: Check command safety - BLOCKED always checked first, regardless of flags
+        classification = self.permission_checker.classify_command(command)
 
-            if classification.risk_level.value == "blocked":
+        # BLOCKED commands are ALWAYS rejected - no bypass possible
+        if classification.risk_level == CommandRiskLevel.BLOCKED:
+            raise PermissionError(
+                f"Command blocked for safety: {classification.reason}"
+            )
+
+        # DANGEROUS commands require confirmation via callback
+        if classification.risk_level == CommandRiskLevel.DANGEROUS:
+            # FIX 2: Use callback-based confirmation instead of direct input()
+            if self.confirmation_callback is not None:
+                # Call the injected callback
+                reason = classification.reason
+                confirmed = self.confirmation_callback(command, reason)
+                if not confirmed:
+                    raise PermissionError(
+                        f"Command denied by user: {classification.reason}\n"
+                        f"Command: {command}"
+                    )
+            else:
+                # No callback provided - fail closed (deny by default)
+                # This is the safe default for non-interactive/testing scenarios
                 raise PermissionError(
-                    f"Command blocked for safety: {classification.reason}"
+                    f"Command requires confirmation but no callback provided: "
+                    f"{classification.reason}\nCommand: {command}"
                 )
 
-            if classification.risk_level.value == "dangerous":
-                # In non-interactive mode, we raise an error
-                # Interactive CLI should handle this before calling run_command
-                raise PermissionError(
-                    f"Command requires confirmation: {classification.reason}\n"
-                    f"Command: {command}"
-                )
+        # CAUTION commands can proceed with just a log warning
+        if classification.risk_level == CommandRiskLevel.CAUTION:
+            logger.info(f"Caution: {classification.reason} - Command: {command}")
 
         # Prepare command execution
         exec_timeout = timeout if timeout is not None else self.timeout
@@ -284,41 +308,3 @@ class SubprocessExecutor(Executor):
             raise NotADirectoryError(f"Not a directory: {path}")
 
         return os.listdir(validated_path)
-
-    def request_confirmation(self, command: str) -> bool:
-        """
-        Request user confirmation for a dangerous command.
-
-        This method should be called by interactive CLI before executing
-        dangerous commands. For non-interactive use, raises PermissionError.
-
-        Args:
-            command: The command requiring confirmation
-
-        Returns:
-            True if user confirmed, False otherwise
-
-        Raises:
-            PermissionError: If command is blocked
-        """
-        classification = self.permission_checker.classify_command(command)
-
-        if classification.risk_level.value == "blocked":
-            raise PermissionError(
-                f"⛔ BLOCKED: {classification.reason}"
-            )
-
-        if classification.risk_level.value != "dangerous":
-            return True  # No confirmation needed
-
-        # Print warning and ask for confirmation
-        print(self.permission_checker.get_safety_message(command))
-
-        while True:
-            response = input("Proceed? (y/n): ").strip().lower()
-            if response in ("y", "yes"):
-                return True
-            elif response in ("n", "no"):
-                return False
-            else:
-                print("Please enter 'y' or 'n'")
