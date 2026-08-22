@@ -1,0 +1,59 @@
+# MiniAgent Configuration Example
+# Copy this file to config.yaml and customize as needed
+
+llm:
+  # Primary LLM provider (uses litellm format: provider/model)
+  primary: "openrouter/qwen/qwen-2.5-coder-32b-instruct"
+  
+  # Fallback providers in order of preference
+  fallback:
+    - "groq/llama-3.3-70b-versatile"
+    - "deepseek/deepseek-chat"
+    - "ollama/qwen2.5-coder"
+  
+  # API keys (use ${ENV_VAR} syntax for environment variables)
+  api_keys:
+    openrouter: "${OPENROUTER_API_KEY}"
+    groq: "${GROQ_API_KEY}"
+    deepseek: "${DEEPSEEK_API_KEY}"
+    anthropic: "${ANTHROPIC_API_KEY}"
+    openai: "${OPENAI_API_KEY}"
+    dashscope: "${DASHSCOPE_API_KEY}"
+  
+  # Generation settings
+  temperature: 0.3
+  max_tokens: 4096
+  max_retries: 2
+  timeout: 60
+
+executor:
+  # Executor type: 'subprocess' or 'docker'
+  type: "subprocess"
+  
+  # Restricted workspace directory (all file ops limited to this folder)
+  workspace: "./workspace"
+  
+  # Default timeout for command execution (seconds)
+  timeout: 30
+  
+  # WARNING: Setting to true bypasses safety confirmations for dangerous commands
+  allow_dangerous: false
+  
+  # Log file path for execution audit trail
+  log_file: ".miniagent/logs/execution.log"
+
+memory:
+  # Number of messages to keep in short-term conversation buffer
+  short_term_window: 10
+  
+  # Enable long-term memory persistence
+  long_term_enabled: true
+  
+  # Storage path for long-term memory
+  storage_path: ".miniagent/memory"
+
+# Directory paths
+skills_dir: "./skills"
+prompts_dir: "./prompts"
+sessions_dir: ".miniagent/sessions"
+logs_dir: ".miniagent/logs"
