@@ -284,8 +284,8 @@ class PermissionChecker:
         i = 0
         in_single_quote = False
         in_double_quote = False
-        in_backtick = False  # FIX 3: Changed from backtick_depth counter to boolean toggle
         paren_depth = 0
+        backtick_depth = 0
         brace_depth = 0  # Track {} for function definitions
 
         while i < len(command):
@@ -298,9 +298,9 @@ class PermissionChecker:
             elif char == '"' and not in_single_quote:
                 in_double_quote = not in_double_quote
                 current.append(char)
-            # Handle backticks - FIX 3: Use boolean toggle instead of counter
+            # Handle backticks
             elif char == "`" and not in_single_quote and not in_double_quote:
-                in_backtick = not in_backtick
+                backtick_depth += 1
                 current.append(char)
             # Handle $() nesting
             elif (
@@ -333,7 +333,7 @@ class PermissionChecker:
                 not in_single_quote
                 and not in_double_quote
                 and paren_depth == 0
-                and not in_backtick  # FIX 3: Changed from backtick_depth == 0
+                and backtick_depth == 0
                 and brace_depth == 0  # Don't split inside function body
             ):
                 # Check for &&
