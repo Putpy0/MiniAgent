@@ -1,11 +1,10 @@
 """Command safety checker with whitelist/blacklist for dangerous operations."""
 
 import re
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
-
-
 class CommandRiskLevel(Enum):
     """Risk level classification for commands."""
 
@@ -13,8 +12,6 @@ class CommandRiskLevel(Enum):
     CAUTION = "caution"  # Should warn user but can proceed
     DANGEROUS = "dangerous"  # Requires explicit confirmation
     BLOCKED = "blocked"  # Never allowed
-
-
 @dataclass
 class CommandClassification:
     """Classification result for a command."""
@@ -22,8 +19,6 @@ class CommandClassification:
     risk_level: CommandRiskLevel
     reason: str
     matched_pattern: Optional[str] = None
-
-
 class PermissionChecker:
     """
     Security checker for shell commands.
@@ -50,6 +45,9 @@ class PermissionChecker:
         # Bootloader destruction
         r"update-grub.*--recheck",
         r"grub-install.*--force",
+        # CRITICAL FIX: dd to device targets
+        r"dd\s+(of=|.*\.\./|/dev/).*=",
+        r"dd\s+if=/dev/(zero|random|urandom|sd[a-z]\d+)",
     ]
 
     # Patterns for dangerous commands (require confirmation)
@@ -88,9 +86,65 @@ class PermissionChecker:
         r"ufw\s+disable",
         r"iptables\s+-F",
         r"iptables\s+-X",
+        # ADDITIONAL DANGEROUS PATTERNS:
+        r"wget\s+.*\|.*bash",
+        r"curl\s+.*\|.*bash",
+        r"ssh\s+.*\|.*sh",
+        r"scp\s+.*\|.*sh",
+        r"rsync\s+.*\|.*sh",
+        r"docker\s+run.*-v.*:/.*",
+        r"docker\s+run.*--privileged",
+        r"kubectl\s+delete.*namespace",
+        r"kubectl\s+delete.*pod",
+        r"docker-compose\s+down\s+--remove-orphans",
+        r"docker\s+rm.*-f.*--all",
+        r"docker\s+image\s+rm.*--all",
+        r"rmdir\s+/",
+        r"echo.*>/dev/sda",
+        r"echo.*>/dev/(sda1|sdb1|hda)",
+        r"mkfs\.ext4.*\/dev\/sda",
+        r"fsck\.ext4.*\/dev\/sda",
+        r"fdisk\/dev\/sda",
+        r"parted.*\/dev\/sda",
     ]
 
-    # Commands that require caution but are commonly needed
+    # SAFE commands - only truly safe commands are allowed without confirmation
+    # WARNING: Even these should be reviewed carefully for safety
+    SAFE_COMMANDS = [
+        # File operations (safe when used carefully)
+        "ls", "dir", "pwd", "echo", "cat", "head", "tail", "less", "more",
+        # System info
+        "uname", "hostname", "whoami", "date", "time", "uptime", "free",
+        # Network operations (mostly safe)
+        "ping", "traceroute", "netstat", "ss", "dig", "nslookup", "host",
+        # Programming languages (only if the code itself is safe)
+        "python", "python3", "node", "npm", "yarn", "gcc", "g++", "clang",
+        "rustc", "cargo", "go", "javac", "java", "javac",
+        # Build tools
+        "make", "cmake", "pip", "pip3", "npm", "yarn",
+        # Development tools
+        "vim", "nano", "emacs", "code", "bat", "ripgrep", "rg", "ag",
+        # Data processing
+        "jq", "yq", "sed", "awk", "sort", "uniq", "cut", "paste", "tr",
+        # Cryptography and data encoding
+        "md5sum", "sha1sum", "sha256sum", "sha512sum", "openssl", "base64", "xxd",
+        "hexdump", "od", "strings", "test", "[", "true", "false",
+        # Additional safe commands
+        "git", "ssh", "scp", "rsync", "curl", "wget", "docker", "docker-compose",
+        "kubectl", "helm", "terraform", "ansible",
+    ]
+
+    # Set of base commands that are dangerous and require confirmation
+    # These are separated from CAUTION_COMMANDS to ensure they are always DANGEROUS
+    DANGEROUS_BASE_COMMANDS = {
+        "rm", "find", "curl", "wget", "ssh", "scp", "rsync", "docker",
+        "docker-compose", "kubectl", "helm", "terraform", "ansible", "chmod",
+        "chown", "mv", "cp", "mkdir", "touch", "rmdir", "dd", "mkfs", "fdisk",
+        "parted", "iptables", "systemctl", "service", "apt", "yum", "dnf",
+        "pacman", "zypper", "env", "printenv",
+    }
+
+    # CAUTION commands
     CAUTION_COMMANDS = [
         "git reset --hard",
         "git clean -fd",
@@ -102,137 +156,7 @@ class PermissionChecker:
         "cargo clean",
         "make clean",
         "truncate -s 0",
-        ": > largefile",  # Truncate via redirect
-    ]
-
-    # Safe commands that don't need confirmation (whitelist)
-    SAFE_COMMANDS = [
-        "ls",
-        "dir",
-        "pwd",
-        "echo",
-        "cat",
-        "head",
-        "tail",
-        "less",
-        "more",
-        "wc",
-        "grep",
-        "find",
-        "which",
-        "whereis",
-        "man",
-        "help",
-        "type",
-        "stat",
-        "file",
-        "uname",
-        "hostname",
-        "whoami",
-        "date",
-        "time",
-        "uptime",
-        "free",
-        "df",
-        "du",
-        "top",
-        "ps",
-        "pgrep",
-        "pidof",
-        "env",
-        "printenv",
-        "export",
-        "alias",
-        "unalias",
-        "set",
-        "shopt",
-        "cd",
-        "mkdir",
-        "touch",
-        "cp",
-        "mv",
-        "ln",
-        "chmod",
-        "chown",
-        "tar",
-        "gzip",
-        "gunzip",
-        "zip",
-        "unzip",
-        "bzip2",
-        "xz",
-        "python",
-        "python3",
-        "pip",
-        "pip3",
-        "npm",
-        "npx",
-        "node",
-        "yarn",
-        "git",
-        "ssh",
-        "scp",
-        "rsync",
-        "curl",
-        "wget",
-        "ping",
-        "traceroute",
-        "netstat",
-        "ss",
-        "dig",
-        "nslookup",
-        "host",
-        "make",
-        "cmake",
-        "gcc",
-        "g++",
-        "clang",
-        "rustc",
-        "cargo",
-        "go",
-        "javac",
-        "java",
-        "docker",
-        "docker-compose",
-        "kubectl",
-        "helm",
-        "terraform",
-        "ansible",
-        "vim",
-        "nano",
-        "emacs",
-        "code",
-        "bat",
-        "ripgrep",
-        "rg",
-        "ag",
-        "jq",
-        "yq",
-        "sed",
-        "awk",
-        "sort",
-        "uniq",
-        "cut",
-        "paste",
-        "tr",
-        "diff",
-        "patch",
-        "cmp",
-        "comm",
-        "md5sum",
-        "sha1sum",
-        "sha256sum",
-        "sha512sum",
-        "openssl",
-        "base64",
-        "xxd",
-        "hexdump",
-        "od",
-        "strings",
-        "test",
-        "[",
-        "true",
-        "false",
+        ": > largefile",
     ]
 
     def __init__(self, allow_dangerous: bool = False):
@@ -255,8 +179,7 @@ class PermissionChecker:
             re.compile(pattern, re.IGNORECASE) for pattern in self.DANGEROUS_PATTERNS
         ]
 
-    def _split_compound_command(self, command: str) -> list[str]:
-        """
+    def _split_compound_command(self, command: str) -> list[str]:n        """
         Split a compound command into individual sub-commands.
 
         FIX 3: This function detects command chaining operators (&&, ;, |, ||)
@@ -482,6 +405,15 @@ class PermissionChecker:
                     matched_pattern=regex.pattern,
                 )
 
+        # Check for base commands that are always dangerous
+        base_cmd = self._extract_base_command(command_stripped)
+        if base_cmd in self.DANGEROUS_BASE_COMMANDS:
+            return CommandClassification(
+                risk_level=CommandRiskLevel.DANGEROUS,
+                reason=f"Command '{base_cmd}' is in the dangerous commands list and requires confirmation",
+                matched_pattern=base_cmd,
+            )
+
         # Check caution commands
         for caution_cmd in self.CAUTION_COMMANDS:
             if caution_cmd in command_stripped.lower():
@@ -490,9 +422,6 @@ class PermissionChecker:
                     reason=f"Command '{caution_cmd}' should be used with care",
                     matched_pattern=caution_cmd,
                 )
-
-        # Extract base command for whitelist check
-        base_cmd = self._extract_base_command(command_stripped)
 
         # Check if base command is in safe list
         if base_cmd in self.SAFE_COMMANDS:
@@ -534,6 +463,59 @@ class PermissionChecker:
                 return parts[0].split("/")[-1]
 
         return ""
+
+    def extract_path_like_arguments(self, command: str) -> list[str]:
+        """
+        Extract path-like arguments from a command for validation.
+
+        Args:
+            command: The command to analyze
+
+        Returns:
+            List of path-like arguments found in the command
+        """
+        import shlex
+
+        paths = []
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            tokens = command.split()
+
+        # Common flags that take path arguments
+        path_flags = {
+            '-o', '--output', '-O', '-C', '--output-directory', '--file',
+            '--if', '-if', '--of', '-of', '--input', '--dest', '--target',
+            '--path', '--directory', '--workspace', '--working-directory'
+        }
+
+        i = 0
+        while i < len(tokens):
+            token = tokens[i]
+
+            # Check if token is a path flag
+            if token in path_flags or (token.startswith('-') and len(token) > 1):
+                if i + 1 < len(tokens):
+                    next_token = tokens[i + 1]
+                    # Skip if next token is a flag (starts with -)
+                    if not next_token.startswith('-'):
+                        # Check if it looks like a path
+                        if ('/' in next_token) or ('\\' in next_token) or (
+                                next_token.startswith('~')) or (next_token.startswith('.')):
+                            paths.append(next_token)
+                            i += 2
+                            continue
+
+            # Check for token that contains a path (e.g., "file.txt", "/path/to/file")
+            if ('/' in token) or ('\\' in token) or (token.startswith('~')) or (
+                    token.startswith('.')):
+                # Exclude common safe paths
+                if not token in ['..', '.', './', '../']:
+                    paths.append(token)
+
+            i += 1
+
+        return paths
 
     def requires_confirmation(self, command: str) -> bool:
         """
@@ -583,19 +565,19 @@ class PermissionChecker:
 
         if classification.risk_level == CommandRiskLevel.BLOCKED:
             return (
-                f"⛔ BLOCKED: This command is not allowed for safety reasons.\n"
+                f"\u26a0\ufe0f BLOCKED: This command is not allowed for safety reasons.\n"
                 f"   Reason: {classification.reason}"
             )
         elif classification.risk_level == CommandRiskLevel.DANGEROUS:
             return (
-                f"⚠️  WARNING: This command may be dangerous.\n"
+                f"\u26a0\ufe0f WARNING: This command may be dangerous.\n"
                 f"   Reason: {classification.reason}\n"
                 f"   Command: {command}\n"
                 f"   Are you sure you want to proceed? (y/n)"
             )
         elif classification.risk_level == CommandRiskLevel.CAUTION:
             return (
-                f"ℹ️  Caution: {classification.reason}\n"
+                f"\u26a0\ufe0f Caution: {classification.reason}\n"
                 f"   Command: {command}"
             )
         return ""
