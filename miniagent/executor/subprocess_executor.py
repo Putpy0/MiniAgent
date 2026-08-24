@@ -10,11 +10,9 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from miniagent.executor.base import Executor, ExecutionResult
-from miniagent.executor.permission import CommandRiskLevel, PermissionChecker
+from miniagent.executor.permission import PermissionChecker
 
 logger = logging.getLogger(__name__)
-
-
 class SubprocessExecutor(Executor):
     """
     Subprocess-based command executor with security features.
@@ -34,6 +32,7 @@ class SubprocessExecutor(Executor):
         allow_dangerous: bool = False,
         log_file: Optional[str] = None,
         confirmation_callback: Optional[Callable[[str, str], bool]] = None,
+        env_denylist_patterns: Optional[list[str]] = None,
     ):
         """
         Initialize the subprocess executor.
@@ -47,15 +46,53 @@ class SubprocessExecutor(Executor):
                 Signature: callback(command: str, reason: str) -> bool
                 Returns True to allow, False to deny.
                 If None, dangerous commands will fail closed (denied by default).
+            env_denylist_patterns: List of regex patterns for environment variables
+                that should be filtered from subprocess environment.
+                Defaults to blocking API keys and tokens.
         """
         super().__init__(workspace_root, timeout, confirmation_callback)
         self.permission_checker = PermissionChecker(allow_dangerous=allow_dangerous)
         self.log_file = log_file
         self._ensure_workspace_exists()
 
+        # Environment denylist patterns
+        if env_denylist_patterns is None:
+            import re
+            env_denylist_patterns = [
+                r".*_API_KEY$",
+                r".*_TOKEN$",
+                r".*_SECRET$",
+                r".*_PASSWORD$",
+                r".*KEY$",
+            ]
+        self.env_denylist_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in env_denylist_patterns]
+
     def _ensure_workspace_exists(self) -> None:
         """Ensure workspace directory exists."""
         Path(self.workspace_root).mkdir(parents=True, exist_ok=True)
+
+    def _get_filtered_environment(self) -> dict:
+        """
+        Get a filtered copy of the environment for subprocess execution.
+
+        Returns:
+            Filtered environment dictionary with sensitive variables removed.
+        """
+        # Start with a copy of the current environment
+        env = os.environ.copy()
+
+        # Filter out variables matching denylist patterns
+        keys_to_remove = []
+        for key in env.keys():
+            for pattern in self.env_denylist_patterns:
+                if pattern.match(key):
+                    keys_to_remove.append(key)
+                    break
+
+        for key in keys_to_remove:
+            del env[key]
+
+        return env
 
     def _log_execution(self, result: ExecutionResult) -> None:
         """Log execution result to file for audit trail."""
@@ -101,9 +138,9 @@ class SubprocessExecutor(Executor):
 
         Args:
             command: Command to execute
-            cwd: Working directory (must be within workspace)
+            cwd: Working directory (must be within workspace_root)
             timeout: Timeout in seconds (overrides default)
-            shell: Whether to run through shell (default False)
+            shell: Whether to run through shell (default False for safety)
 
         Returns:
             ExecutionResult with output and metadata
@@ -179,6 +216,9 @@ class SubprocessExecutor(Executor):
 
             logger.info(f"Executing command: {command} (cwd={validated_cwd})")
 
+            # Get filtered environment for subprocess
+            filtered_env = self._get_filtered_environment()
+
             result = subprocess.run(
                 args if shell else args,
                 cwd=validated_cwd,
@@ -186,7 +226,7 @@ class SubprocessExecutor(Executor):
                 text=True,
                 timeout=exec_timeout,
                 shell=shell,
-                env=os.environ.copy(),
+                env=filtered_env,
             )
 
             duration_ms = int((time.time() - start_time) * 1000)

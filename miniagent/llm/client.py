@@ -11,8 +11,6 @@ from miniagent.config import LLMConfig
 from miniagent.llm.providers import ProviderRegistry
 
 logger = logging.getLogger(__name__)
-
-
 @dataclass
 class LLMResponse:
     """Response from an LLM request."""
@@ -23,8 +21,6 @@ class LLMResponse:
     usage: dict[str, int] = field(default_factory=dict)
     raw_response: Optional[Any] = None
     error: Optional[str] = None
-
-
 class LLMClient:
     """
     Multi-provider LLM client using LiteLLM.
@@ -44,30 +40,8 @@ class LLMClient:
             config: LLM configuration with provider settings
         """
         self.config = config
-        self._setup_api_keys()
-
-    def _setup_api_keys(self) -> None:
-        """Set up API keys in environment for LiteLLM."""
-        import os
-
-        # Map provider names to environment variable names expected by litellm
-        provider_env_map = {
-            "openrouter": "OPENROUTER_API_KEY",
-            "groq": "GROQ_API_KEY",
-            "deepseek": "DEEPSEEK_API_KEY",
-            "anthropic": "ANTHROPIC_API_KEY",
-            "openai": "OPENAI_API_KEY",
-            "dashscope": "DASHSCOPE_API_KEY",
-        }
-
-        for provider, key in self.config.api_keys.items():
-            if key:  # Only set if key is provided
-                env_var = provider_env_map.get(provider.lower())
-                if env_var:
-                    os.environ[env_var] = key
-                else:
-                    # For providers not in the map, try to set directly
-                    os.environ[f"{provider.upper()}_API_KEY"] = key
+        # No longer sets API keys globally in os.environ
+        # Instead, we pass them directly to litellm_completion
 
     def _get_all_providers(self) -> list[str]:
         """Get list of all providers to try (primary + fallbacks)."""
@@ -130,6 +104,10 @@ class LLMClient:
                     f"{'(primary)' if is_primary else '(fallback)'}"
                 )
 
+                # Get API key for this provider from config
+                api_key = self.config.api_keys.get(provider_name)
+                
+                # Pass API key directly to litellm_completion
                 response = litellm_completion(
                     model=model,
                     messages=all_messages,
@@ -137,6 +115,7 @@ class LLMClient:
                     max_tokens=tokens,
                     stream=stream,
                     timeout=self.config.timeout,
+                    api_key=api_key,
                     **kwargs,
                 )
 
