@@ -130,8 +130,11 @@ class PermissionChecker:
         "md5sum", "sha1sum", "sha256sum", "sha512sum", "openssl", "base64", "xxd",
         "hexdump", "od", "strings", "test", "[", "true", "false",
         # Additional safe commands
-        "git", "ssh", "scp", "rsync", "curl", "wget", "docker", "docker-compose",
-        "kubectl", "helm", "terraform", "ansible",
+        # NOTE: network/infra tools (ssh, scp, rsync, curl, wget, docker,
+        # docker-compose, kubectl, helm, terraform, ansible) are intentionally
+        # NOT here - they belong to DANGEROUS_BASE_COMMANDS and always require
+        # confirmation. Listing them as safe would be contradictory.
+        "git",
     ]
 
     # Set of base commands that are dangerous and require confirmation
