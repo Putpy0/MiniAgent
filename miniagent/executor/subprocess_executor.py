@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -33,6 +34,7 @@ class SubprocessExecutor(Executor):
         log_file: Optional[str] = None,
         confirmation_callback: Optional[Callable[[str, str], bool]] = None,
         env_denylist_patterns: Optional[list[str]] = None,
+        strict_path_checking: bool = True,
     ):
         """
         Initialize the subprocess executor.
@@ -49,15 +51,19 @@ class SubprocessExecutor(Executor):
             env_denylist_patterns: List of regex patterns for environment variables
                 that should be filtered from subprocess environment.
                 Defaults to blocking API keys and tokens.
+            strict_path_checking: If True (default), path-like arguments in commands
+                are resolved and verified to stay inside workspace_root before
+                execution. Commands referencing paths outside the workspace are
+                rejected with PermissionError.
         """
         super().__init__(workspace_root, timeout, confirmation_callback)
         self.permission_checker = PermissionChecker(allow_dangerous=allow_dangerous)
         self.log_file = log_file
+        self.strict_path_checking = strict_path_checking
         self._ensure_workspace_exists()
 
         # Environment denylist patterns
         if env_denylist_patterns is None:
-            import re
             env_denylist_patterns = [
                 r".*_API_KEY$",
                 r".*_TOKEN$",
@@ -191,6 +197,33 @@ class SubprocessExecutor(Executor):
         # CAUTION commands can proceed with just a log warning
         if classification.risk_level == CommandRiskLevel.CAUTION:
             logger.info(f"Caution: {classification.reason} - Command: {command}")
+
+        # FIX 3: Verify all path-like arguments stay inside the workspace
+        if getattr(self, "strict_path_checking", True):
+            path_candidates = self.permission_checker.extract_path_like_arguments(command)
+            # Windows-style absolute paths (drive letters) use backslashes, which
+            # POSIX shlex strips as escape characters. Scan the raw command so
+            # they cannot bypass the workspace containment check.
+            for match in re.findall(r"[A-Za-z]:[\\/][^\s\"']*", command):
+                if match not in path_candidates:
+                    path_candidates.append(match)
+            for candidate in path_candidates:
+                candidate_expanded = os.path.expanduser(candidate)
+                if os.path.isabs(candidate_expanded):
+                    resolved = os.path.realpath(candidate_expanded)
+                else:
+                    resolved = os.path.realpath(os.path.join(validated_cwd, candidate_expanded))
+                try:
+                    workspace_real = os.path.realpath(self.workspace_root)
+                    if os.path.commonpath([resolved, workspace_real]) != workspace_real:
+                        raise PermissionError(
+                            f"Command references path outside workspace: {candidate} "
+                            f"(resolved to {resolved}, workspace is {workspace_real})"
+                        )
+                except ValueError:
+                    raise PermissionError(
+                        f"Command references path outside workspace (cannot verify containment): {candidate}"
+                    )
 
         # Prepare command execution
         exec_timeout = timeout if timeout is not None else self.timeout
