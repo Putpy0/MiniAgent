@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from miniagent.executor.base import Executor, ExecutionResult
-from miniagent.executor.permission import PermissionChecker
+from miniagent.executor.permission import PermissionChecker, CommandRiskLevel
 
 logger = logging.getLogger(__name__)
 class SubprocessExecutor(Executor):
