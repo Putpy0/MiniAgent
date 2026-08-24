@@ -179,7 +179,8 @@ class PermissionChecker:
             re.compile(pattern, re.IGNORECASE) for pattern in self.DANGEROUS_PATTERNS
         ]
 
-    def _split_compound_command(self, command: str) -> list[str]:n        """
+    def _split_compound_command(self, command: str) -> list[str]:
+        """
         Split a compound command into individual sub-commands.
 
         FIX 3: This function detects command chaining operators (&&, ;, |, ||)
