@@ -75,6 +75,12 @@ class PermissionChecker:
         r"wget.*-O\s*-.*\|\s*(ba)?sh",
         r"curl.*\|\s*python",
         r"wget.*\|\s*python",
+        # Inline code execution via interpreter/editor flags - can run
+        # arbitrary logic even though the base command is otherwise safe.
+        # Plain usage (python script.py, vim file.txt) stays SAFE.
+        r"python3?\s+.*(-c|--command)\s+",
+        r"pip3?\s+install\s+",  # package install can run arbitrary setup.py
+        r"vim?\s+.*-c\s+",      # vi/vim command-mode execution
         # Changing permissions recursively
         r"chmod\s+-R\s+777",
         r"chmod\s+-R\s+a\+rwx",
@@ -122,7 +128,11 @@ class PermissionChecker:
         # Network operations (mostly safe)
         "ping", "traceroute", "netstat", "ss", "dig", "nslookup", "host",
         # Programming languages (only if the code itself is safe)
-        "python", "python3", "node", "npm", "yarn", "gcc", "g++", "clang",
+        "python", "python3", "node", "npm", "yarn",
+        # Compilers stay SAFE: compiling != executing. The compiled binary
+        # only runs via a separate command, which gets classified on its own
+        # (and command chaining via &&/; is split by _split_compound_command).
+        "gcc", "g++", "clang",
         "rustc", "cargo", "go", "javac", "java",
         # Build tools
         "make", "cmake", "pip", "pip3",
