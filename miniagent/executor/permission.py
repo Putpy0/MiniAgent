@@ -123,9 +123,9 @@ class PermissionChecker:
         "ping", "traceroute", "netstat", "ss", "dig", "nslookup", "host",
         # Programming languages (only if the code itself is safe)
         "python", "python3", "node", "npm", "yarn", "gcc", "g++", "clang",
-        "rustc", "cargo", "go", "javac", "java", "javac",
+        "rustc", "cargo", "go", "javac", "java",
         # Build tools
-        "make", "cmake", "pip", "pip3", "npm", "yarn",
+        "make", "cmake", "pip", "pip3",
         # Development tools
         "vim", "nano", "emacs", "code", "bat", "ripgrep", "rg", "ag",
         # Data processing
