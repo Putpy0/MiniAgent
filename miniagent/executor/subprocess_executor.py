@@ -30,7 +30,6 @@ class SubprocessExecutor(Executor):
         self,
         workspace_root: str,
         timeout: int = 30,
-        allow_dangerous: bool = False,
         log_file: Optional[str] = None,
         confirmation_callback: Optional[Callable[[str, str], bool]] = None,
         env_denylist_patterns: Optional[list[str]] = None,
@@ -42,7 +41,6 @@ class SubprocessExecutor(Executor):
         Args:
             workspace_root: Root directory for restricted file operations
             timeout: Default timeout in seconds for command execution
-            allow_dangerous: Skip confirmation for dangerous commands (USE WITH CAUTION)
             log_file: Path to execution log file
             confirmation_callback: Callback for dangerous command confirmation.
                 Signature: callback(command: str, reason: str) -> bool
@@ -57,7 +55,7 @@ class SubprocessExecutor(Executor):
                 rejected with PermissionError.
         """
         super().__init__(workspace_root, timeout, confirmation_callback)
-        self.permission_checker = PermissionChecker(allow_dangerous=allow_dangerous)
+        self.permission_checker = PermissionChecker()
         self.log_file = log_file
         self.strict_path_checking = strict_path_checking
         self._ensure_workspace_exists()

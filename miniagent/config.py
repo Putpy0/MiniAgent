@@ -79,10 +79,6 @@ class ExecutorConfig(BaseModel):
         gt=0,
         description="Default timeout in seconds for command execution"
     )
-    allow_dangerous: bool = Field(
-        default=False,
-        description="Allow dangerous commands without confirmation (USE WITH CAUTION)"
-    )
     log_file: str = Field(
         default=".miniagent/logs/execution.log",
         description="Path to execution log file"

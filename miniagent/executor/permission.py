@@ -176,15 +176,10 @@ class PermissionChecker:
         ": > largefile",
     ]
 
-    def __init__(self, allow_dangerous: bool = False):
+    def __init__(self):
         """
         Initialize the permission checker.
-
-        Args:
-            allow_dangerous: If True, skip confirmation for dangerous commands
-                (USE WITH EXTREME CAUTION - only for trusted environments)
         """
-        self.allow_dangerous = allow_dangerous
         self._compile_patterns()
 
     def _compile_patterns(self) -> None:
@@ -546,10 +541,6 @@ class PermissionChecker:
             True if confirmation is required, False otherwise
         """
         classification = self.classify_command(command)
-
-        # If dangerous mode is enabled, skip confirmation for non-blocked
-        if self.allow_dangerous:
-            return classification.risk_level == CommandRiskLevel.BLOCKED
 
         return classification.risk_level in (
             CommandRiskLevel.DANGEROUS,
