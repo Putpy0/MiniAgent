@@ -131,6 +131,7 @@ class SubprocessExecutor(Executor):
         cwd: Optional[str] = None,
         timeout: Optional[int] = None,
         shell: bool = False,
+        raise_on_error: bool = False,
     ) -> ExecutionResult:
         """
         Execute a shell command with security checks.
@@ -145,6 +146,11 @@ class SubprocessExecutor(Executor):
             cwd: Working directory (must be within workspace_root)
             timeout: Timeout in seconds (overrides default)
             shell: Whether to run through shell (default False for safety)
+            raise_on_error: If True, system-level execution failures (command
+                not found, etc.) and timeouts are raised instead of being
+                swallowed into an ExecutionResult with exit_code=-1. The
+                result is still written to the audit log before raising.
+                Defaults to False to preserve backward-compatible behavior.
 
         Returns:
             ExecutionResult with output and metadata
@@ -152,7 +158,8 @@ class SubprocessExecutor(Executor):
         Raises:
             ValueError: If path validation fails
             PermissionError: If command is blocked or denied by confirmation callback
-            TimeoutError: If command exceeds timeout
+            TimeoutError: If command exceeds timeout and raise_on_error is True
+            RuntimeError: If execution fails and raise_on_error is True
         """
         # Validate working directory
         if cwd:
@@ -284,6 +291,12 @@ class SubprocessExecutor(Executor):
                 timed_out=True,
                 error=f"Command timed out after {exec_timeout}s",
             )
+            if raise_on_error:
+                # Log first so the audit trail survives the raise
+                self._log_execution(execution_result)
+                raise TimeoutError(
+                    f"Command timed out after {exec_timeout}s: {command}"
+                ) from e
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             execution_result = ExecutionResult(
@@ -295,6 +308,10 @@ class SubprocessExecutor(Executor):
                 cwd=validated_cwd,
                 error=str(e),
             )
+            if raise_on_error:
+                # Log first so the audit trail survives the raise
+                self._log_execution(execution_result)
+                raise RuntimeError(f"Command execution failed: {command}") from e
 
         # Log execution
         self._log_execution(execution_result)
