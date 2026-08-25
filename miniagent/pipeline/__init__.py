@@ -1,4 +1,4 @@
-﻿"""Staged reasoning pipeline (Intent -> ... -> Finalization)."""
+"""Staged reasoning pipeline (Intent -> ... -> Finalization)."""
 
 from miniagent.pipeline.context import PipelineContext
 from miniagent.pipeline.orchestrator import PipelineStageError, ReasoningPipeline
