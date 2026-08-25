@@ -33,8 +33,6 @@ class PermissionChecker:
         r":\(\)\{\s*:\|:\s*&\s*\}\s*;",
         r"\(\)\s*\{\s*:\|\:&\s*\}\s*;",
         # Direct disk destruction
-        r"dd\s+if=/dev/zero",
-        r"dd\s+if=/dev/random",
         r"mkfs",
         r"mke2fs",
         r"fdisk.*-y",
@@ -45,9 +43,15 @@ class PermissionChecker:
         # Bootloader destruction
         r"update-grub.*--recheck",
         r"grub-install.*--force",
-        # CRITICAL FIX: dd to device targets
-        r"dd\s+(of=|.*\.\./|/dev/).*=",
-        r"dd\s+if=/dev/(zero|random|urandom|sd[a-z]\d+)",
+        # dd writing to a device target (any argument order), except /dev/null
+        # which is always safe to write to. Only the OUTPUT target matters:
+        # reading from /dev/zero|random|urandom is harmless data generation.
+        r"dd\s+.*\bof=(?!/dev/null\b)/dev/\S+",
+        # dd reading from a raw block device (disk/partition imaging).
+        # NOTE: /dev/zero and /dev/random source patterns were removed - they
+        # caused permanent false positives on legitimate commands such as
+        # "dd if=/dev/zero of=swapfile bs=1M count=1024".
+        r"dd\s+.*\bif=/dev/(sd[a-z]+\d*|hd[a-z]+|vd[a-z]+|nvme\d+n\d+(p\d+)?|mmcblk\d+(p\d+)?)\b",
     ]
 
     # Patterns for dangerous commands (require confirmation)
@@ -71,6 +75,12 @@ class PermissionChecker:
         r"wget.*-O\s*-.*\|\s*(ba)?sh",
         r"curl.*\|\s*python",
         r"wget.*\|\s*python",
+        # Inline code execution via interpreter/editor flags - can run
+        # arbitrary logic even though the base command is otherwise safe.
+        # Plain usage (python script.py, vim file.txt) stays SAFE.
+        r"python3?\s+.*(-c|--command)\s+",
+        r"pip3?\s+install\s+",  # package install can run arbitrary setup.py
+        r"vim?\s+.*-c\s+",      # vi/vim command-mode execution
         # Changing permissions recursively
         r"chmod\s+-R\s+777",
         r"chmod\s+-R\s+a\+rwx",
@@ -118,10 +128,14 @@ class PermissionChecker:
         # Network operations (mostly safe)
         "ping", "traceroute", "netstat", "ss", "dig", "nslookup", "host",
         # Programming languages (only if the code itself is safe)
-        "python", "python3", "node", "npm", "yarn", "gcc", "g++", "clang",
-        "rustc", "cargo", "go", "javac", "java", "javac",
+        "python", "python3", "node", "npm", "yarn",
+        # Compilers stay SAFE: compiling != executing. The compiled binary
+        # only runs via a separate command, which gets classified on its own
+        # (and command chaining via &&/; is split by _split_compound_command).
+        "gcc", "g++", "clang",
+        "rustc", "cargo", "go", "javac", "java",
         # Build tools
-        "make", "cmake", "pip", "pip3", "npm", "yarn",
+        "make", "cmake", "pip", "pip3",
         # Development tools
         "vim", "nano", "emacs", "code", "bat", "ripgrep", "rg", "ag",
         # Data processing
@@ -130,8 +144,11 @@ class PermissionChecker:
         "md5sum", "sha1sum", "sha256sum", "sha512sum", "openssl", "base64", "xxd",
         "hexdump", "od", "strings", "test", "[", "true", "false",
         # Additional safe commands
-        "git", "ssh", "scp", "rsync", "curl", "wget", "docker", "docker-compose",
-        "kubectl", "helm", "terraform", "ansible",
+        # NOTE: network/infra tools (ssh, scp, rsync, curl, wget, docker,
+        # docker-compose, kubectl, helm, terraform, ansible) are intentionally
+        # NOT here - they belong to DANGEROUS_BASE_COMMANDS and always require
+        # confirmation. Listing them as safe would be contradictory.
+        "git",
     ]
 
     # Set of base commands that are dangerous and require confirmation
@@ -159,15 +176,10 @@ class PermissionChecker:
         ": > largefile",
     ]
 
-    def __init__(self, allow_dangerous: bool = False):
+    def __init__(self):
         """
         Initialize the permission checker.
-
-        Args:
-            allow_dangerous: If True, skip confirmation for dangerous commands
-                (USE WITH EXTREME CAUTION - only for trusted environments)
         """
-        self.allow_dangerous = allow_dangerous
         self._compile_patterns()
 
     def _compile_patterns(self) -> None:
@@ -179,7 +191,8 @@ class PermissionChecker:
             re.compile(pattern, re.IGNORECASE) for pattern in self.DANGEROUS_PATTERNS
         ]
 
-    def _split_compound_command(self, command: str) -> list[str]:n        """
+    def _split_compound_command(self, command: str) -> list[str]:
+        """
         Split a compound command into individual sub-commands.
 
         FIX 3: This function detects command chaining operators (&&, ;, |, ||)
@@ -528,10 +541,6 @@ class PermissionChecker:
             True if confirmation is required, False otherwise
         """
         classification = self.classify_command(command)
-
-        # If dangerous mode is enabled, skip confirmation for non-blocked
-        if self.allow_dangerous:
-            return classification.risk_level == CommandRiskLevel.BLOCKED
 
         return classification.risk_level in (
             CommandRiskLevel.DANGEROUS,

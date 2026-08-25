@@ -13,7 +13,13 @@ class WorkflowStep:
     intent: str
     command: str
     result: Optional[ExecutionResult] = None
+    # True means the command was allowed AND executed - NOT that it succeeded
     approved: bool = False
+
+    @property
+    def succeeded(self) -> bool:
+        """True if the command was executed AND its outcome was successful."""
+        return self.result.success if self.result else False
 
 
 class WorkflowContext:

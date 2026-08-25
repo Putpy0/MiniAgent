@@ -79,10 +79,6 @@ class ExecutorConfig(BaseModel):
         gt=0,
         description="Default timeout in seconds for command execution"
     )
-    allow_dangerous: bool = Field(
-        default=False,
-        description="Allow dangerous commands without confirmation (USE WITH CAUTION)"
-    )
     log_file: str = Field(
         default=".miniagent/logs/execution.log",
         description="Path to execution log file"
@@ -145,6 +141,9 @@ class MiniAgentConfig(BaseModel):
 
         with open(config_file, "r", encoding="utf-8") as f:
             raw_config = yaml.safe_load(f)
+
+        # An empty (or comment-only) YAML file parses to None - fall back to {}
+        raw_config = raw_config or {}
 
         # Resolve environment variables in the raw config
         raw_config = cls._resolve_env_in_dict(raw_config)

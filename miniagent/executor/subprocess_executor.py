@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -10,7 +11,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from miniagent.executor.base import Executor, ExecutionResult
-from miniagent.executor.permission import PermissionChecker
+from miniagent.executor.permission import PermissionChecker, CommandRiskLevel
 
 logger = logging.getLogger(__name__)
 class SubprocessExecutor(Executor):
@@ -29,10 +30,10 @@ class SubprocessExecutor(Executor):
         self,
         workspace_root: str,
         timeout: int = 30,
-        allow_dangerous: bool = False,
         log_file: Optional[str] = None,
         confirmation_callback: Optional[Callable[[str, str], bool]] = None,
         env_denylist_patterns: Optional[list[str]] = None,
+        strict_path_checking: bool = True,
     ):
         """
         Initialize the subprocess executor.
@@ -40,7 +41,6 @@ class SubprocessExecutor(Executor):
         Args:
             workspace_root: Root directory for restricted file operations
             timeout: Default timeout in seconds for command execution
-            allow_dangerous: Skip confirmation for dangerous commands (USE WITH CAUTION)
             log_file: Path to execution log file
             confirmation_callback: Callback for dangerous command confirmation.
                 Signature: callback(command: str, reason: str) -> bool
@@ -49,15 +49,19 @@ class SubprocessExecutor(Executor):
             env_denylist_patterns: List of regex patterns for environment variables
                 that should be filtered from subprocess environment.
                 Defaults to blocking API keys and tokens.
+            strict_path_checking: If True (default), path-like arguments in commands
+                are resolved and verified to stay inside workspace_root before
+                execution. Commands referencing paths outside the workspace are
+                rejected with PermissionError.
         """
         super().__init__(workspace_root, timeout, confirmation_callback)
-        self.permission_checker = PermissionChecker(allow_dangerous=allow_dangerous)
+        self.permission_checker = PermissionChecker()
         self.log_file = log_file
+        self.strict_path_checking = strict_path_checking
         self._ensure_workspace_exists()
 
         # Environment denylist patterns
         if env_denylist_patterns is None:
-            import re
             env_denylist_patterns = [
                 r".*_API_KEY$",
                 r".*_TOKEN$",
@@ -127,6 +131,7 @@ class SubprocessExecutor(Executor):
         cwd: Optional[str] = None,
         timeout: Optional[int] = None,
         shell: bool = False,
+        raise_on_error: bool = False,
     ) -> ExecutionResult:
         """
         Execute a shell command with security checks.
@@ -141,6 +146,11 @@ class SubprocessExecutor(Executor):
             cwd: Working directory (must be within workspace_root)
             timeout: Timeout in seconds (overrides default)
             shell: Whether to run through shell (default False for safety)
+            raise_on_error: If True, system-level execution failures (command
+                not found, etc.) and timeouts are raised instead of being
+                swallowed into an ExecutionResult with exit_code=-1. The
+                result is still written to the audit log before raising.
+                Defaults to False to preserve backward-compatible behavior.
 
         Returns:
             ExecutionResult with output and metadata
@@ -148,7 +158,8 @@ class SubprocessExecutor(Executor):
         Raises:
             ValueError: If path validation fails
             PermissionError: If command is blocked or denied by confirmation callback
-            TimeoutError: If command exceeds timeout
+            TimeoutError: If command exceeds timeout and raise_on_error is True
+            RuntimeError: If execution fails and raise_on_error is True
         """
         # Validate working directory
         if cwd:
@@ -191,6 +202,33 @@ class SubprocessExecutor(Executor):
         # CAUTION commands can proceed with just a log warning
         if classification.risk_level == CommandRiskLevel.CAUTION:
             logger.info(f"Caution: {classification.reason} - Command: {command}")
+
+        # FIX 3: Verify all path-like arguments stay inside the workspace
+        if getattr(self, "strict_path_checking", True):
+            path_candidates = self.permission_checker.extract_path_like_arguments(command)
+            # Windows-style absolute paths (drive letters) use backslashes, which
+            # POSIX shlex strips as escape characters. Scan the raw command so
+            # they cannot bypass the workspace containment check.
+            for match in re.findall(r"[A-Za-z]:[\\/][^\s\"']*", command):
+                if match not in path_candidates:
+                    path_candidates.append(match)
+            for candidate in path_candidates:
+                candidate_expanded = os.path.expanduser(candidate)
+                if os.path.isabs(candidate_expanded):
+                    resolved = os.path.realpath(candidate_expanded)
+                else:
+                    resolved = os.path.realpath(os.path.join(validated_cwd, candidate_expanded))
+                try:
+                    workspace_real = os.path.realpath(self.workspace_root)
+                    if os.path.commonpath([resolved, workspace_real]) != workspace_real:
+                        raise PermissionError(
+                            f"Command references path outside workspace: {candidate} "
+                            f"(resolved to {resolved}, workspace is {workspace_real})"
+                        )
+                except ValueError:
+                    raise PermissionError(
+                        f"Command references path outside workspace (cannot verify containment): {candidate}"
+                    )
 
         # Prepare command execution
         exec_timeout = timeout if timeout is not None else self.timeout
@@ -253,6 +291,12 @@ class SubprocessExecutor(Executor):
                 timed_out=True,
                 error=f"Command timed out after {exec_timeout}s",
             )
+            if raise_on_error:
+                # Log first so the audit trail survives the raise
+                self._log_execution(execution_result)
+                raise TimeoutError(
+                    f"Command timed out after {exec_timeout}s: {command}"
+                ) from e
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)
             execution_result = ExecutionResult(
@@ -264,6 +308,10 @@ class SubprocessExecutor(Executor):
                 cwd=validated_cwd,
                 error=str(e),
             )
+            if raise_on_error:
+                # Log first so the audit trail survives the raise
+                self._log_execution(execution_result)
+                raise RuntimeError(f"Command execution failed: {command}") from e
 
         # Log execution
         self._log_execution(execution_result)

@@ -1,6 +1,7 @@
 """Skill installer for cloning skills from Git repositories."""
 
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Optional
@@ -61,6 +62,31 @@ class SkillInstaller:
                 return True
 
         return False
+
+    def _validate_branch(self, branch: str) -> bool:
+        """
+        Validate a git branch/ref name before passing it to subprocess.
+
+        Prevents argument injection (e.g. a branch starting with '-' being
+        interpreted as a git option such as --upload-pack=...).
+
+        Args:
+            branch: Branch name to validate
+
+        Returns:
+            True if the branch name is safe, False otherwise
+        """
+        if not branch or not branch.strip():
+            return False
+
+        branch = branch.strip()
+
+        # Never allow options - a leading '-' would be parsed by git as flags
+        if branch.startswith("-"):
+            return False
+
+        # Only allow characters valid in git ref names
+        return bool(re.match(r"^[A-Za-z0-9_./-]+$", branch))
 
     def _normalize_git_url(self, url: str) -> str:
         """
@@ -135,6 +161,10 @@ class SkillInstaller:
         if not self._validate_git_url(git_url):
             return False, f"Invalid Git URL format: {git_url}"
 
+        # Validate branch BEFORE it reaches the subprocess (argument injection)
+        if branch and not self._validate_branch(branch):
+            return False, f"Invalid branch name: {branch}"
+
         # Normalize URL
         normalized_url = self._normalize_git_url(git_url)
 
@@ -168,7 +198,9 @@ class SkillInstaller:
         if branch:
             clone_cmd.extend(["--branch", branch])
 
-        clone_cmd.extend([normalized_url, str(skill_path)])
+        # "--" separator: git must treat everything after it as positional
+        # arguments (defense-in-depth against option injection)
+        clone_cmd.extend(["--", normalized_url, str(skill_path)])
 
         try:
             logger.info(f"Cloning skill from: {normalized_url}")
