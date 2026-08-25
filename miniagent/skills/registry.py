@@ -108,8 +108,11 @@ class SkillRegistry:
             # Check description match
             if skill.name.lower() in query_lower:
                 score += 5
-            if skill.description.lower() in query_lower:
-                score += 3
+            # Word-overlap between description and query, capped so it can
+            # never outweigh more precise name/trigger matches
+            description_words = set(skill.description.lower().split())
+            overlap = len(description_words & query_words)
+            score += min(overlap, 3)
 
             # Check trigger matches
             for trigger in skill.triggers:
