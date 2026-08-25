@@ -1,12 +1,46 @@
 """MiniAgent configuration module using Pydantic."""
 
+import logging
 import os
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+logger = logging.getLogger(__name__)
+
+
+def _resolve_env_string(value: str) -> str:
+    """Resolve a single "${ENV_VAR}" placeholder string.
+
+    Unset variables substitute to an empty string WITH a loud warning -
+    silently producing an empty API key is dangerous and hard to debug.
+    """
+    if not (value.startswith("${") and value.endswith("}")):
+        return value
+    env_var = value[2:-1]
+    resolved = os.getenv(env_var)
+    if resolved is None:
+        logger.warning(
+            "Environment variable '%s' referenced in config is not set; "
+            "substituting an empty string",
+            env_var,
+        )
+        return ""
+    return resolved
+
+
+def _resolve_env_deep(obj: Any) -> Any:
+    """Recursively resolve ${ENV_VAR} placeholders in dicts/lists/strings."""
+    if isinstance(obj, dict):
+        return {k: _resolve_env_deep(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_resolve_env_deep(v) for v in obj]
+    if isinstance(obj, str):
+        return _resolve_env_string(obj)
+    return obj
 
 
 class LLMConfig(BaseModel):
@@ -53,14 +87,7 @@ class LLMConfig(BaseModel):
     @classmethod
     def resolve_env_vars(cls, v: dict[str, str]) -> dict[str, str]:
         """Resolve ${ENV_VAR} syntax in API keys."""
-        resolved = {}
-        for key, value in v.items():
-            if value.startswith("${") and value.endswith("}"):
-                env_var = value[2:-1]
-                resolved[key] = os.getenv(env_var, "")
-            else:
-                resolved[key] = value
-        return resolved
+        return {key: _resolve_env_string(value) for key, value in v.items()}
 
 
 class ExecutorConfig(BaseModel):
@@ -145,24 +172,17 @@ class MiniAgentConfig(BaseModel):
         # An empty (or comment-only) YAML file parses to None - fall back to {}
         raw_config = raw_config or {}
 
-        # Resolve environment variables in the raw config
-        raw_config = cls._resolve_env_in_dict(raw_config)
-
+        # ${ENV_VAR} resolution happens in the model validator below, so YAML
+        # and programmatic construction behave identically.
         return cls(**raw_config)
 
+    @model_validator(mode="before")
     @classmethod
-    def _resolve_env_in_dict(cls, d: dict[str, Any]) -> dict[str, Any]:
-        """Recursively resolve ${ENV_VAR} syntax in dictionary values."""
-        result = {}
-        for key, value in d.items():
-            if isinstance(value, dict):
-                result[key] = cls._resolve_env_in_dict(value)
-            elif isinstance(value, str) and value.startswith("${") and value.endswith("}"):
-                env_var = value[2:-1]
-                result[key] = os.getenv(env_var, "")
-            else:
-                result[key] = value
-        return result
+    def _resolve_env_placeholders(cls, data: Any) -> Any:
+        """Resolve ${ENV_VAR} placeholders on every construction path."""
+        if isinstance(data, dict):
+            return _resolve_env_deep(data)
+        return data
 
     def ensure_directories(self) -> None:
         """Ensure all required directories exist."""
