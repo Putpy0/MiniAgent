@@ -1,6 +1,7 @@
 """LLM client with multi-provider support and automatic fallback."""
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -372,5 +373,50 @@ class LLMClient:
 
         try:
             return json.loads(content)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON response: {e}") from e
+        except json.JSONDecodeError as direct_error:
+            parsed = _extract_first_json_object(content)
+            if parsed is not None:
+                return parsed
+            raise ValueError(f"Invalid JSON response: {direct_error}") from direct_error
+
+
+def _extract_first_json_object(text: str) -> Optional[dict[str, Any]]:
+    """Best-effort recovery: find the first balanced {...} block and parse it.
+
+    Handles reasoning models that prefix answers with <think>...</think> or
+    stray prose, and trailing commentary after the JSON object.
+    """
+    import json
+
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL)
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escaped = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : i + 1]
+                    try:
+                        obj = json.loads(candidate)
+                        if isinstance(obj, dict):
+                            return obj
+                    except json.JSONDecodeError:
+                        break
+        start = text.find("{", start + 1)
+    return None

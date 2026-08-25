@@ -1,12 +1,14 @@
 """Complexity-based stage routing.
 
-Mapping (aligned with the examples embedded in 01_intent_analysis.md):
-- simple  -> [1, 6, 10]           (analyze, implement, finalize)
-- medium  -> [1, 2, 4, 6, 7, 9, 10]
+Mapping:
+- simple  -> [1, 6, 8, 10]           (analyze, implement, EXECUTE, finalize)
+- medium  -> [1, 2, 4, 6, 7, 8, 9, 10]
 - complex -> all ten stages
 
-When the Intent stage supplies non-empty `suggested_stages`, that list wins
-(validated against known ids and sorted).
+Stage 8 is included for simple/medium because tasks like "buat file X"
+only produce real artifacts when the Execution stage runs. When the Intent
+stage supplies non-empty `suggested_stages`, that list wins (validated
+against known ids and sorted).
 """
 
 from typing import Optional
@@ -14,8 +16,8 @@ from typing import Optional
 from miniagent.pipeline.stages import ALL_STAGE_IDS
 
 ROUTE_MAP = {
-    "simple": [1, 6, 10],
-    "medium": [1, 2, 4, 6, 7, 9, 10],
+    "simple": [1, 6, 8, 10],
+    "medium": [1, 2, 4, 6, 7, 8, 9, 10],
     "complex": list(ALL_STAGE_IDS),
 }
 

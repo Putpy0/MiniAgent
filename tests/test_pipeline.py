@@ -52,10 +52,10 @@ def _intent(**overrides):
 
 class TestRouter:
     def test_simple(self):
-        assert route_stages("simple") == [1, 6, 10]
+        assert route_stages("simple") == [1, 6, 8, 10]
 
     def test_medium(self):
-        assert route_stages("medium") == [1, 2, 4, 6, 7, 9, 10]
+        assert route_stages("medium") == [1, 2, 4, 6, 7, 8, 9, 10]
 
     def test_complex_runs_all(self):
         assert route_stages("complex") == ALL_STAGE_IDS
@@ -82,11 +82,12 @@ class TestTemplates:
 
 
 class TestOrchestratorSimpleRoute:
-    def test_simple_task_runs_only_1_6_10(self):
+    def test_simple_task_runs_only_1_6_8_10(self):
         llm = FakeLLM(
             {
                 1: _intent(),
                 6: {"code": "print('hi')"},
+                8: {"commands": ["echo hi"]},
                 10: {"summary": "selesai"},
             }
         )
@@ -95,7 +96,7 @@ class TestOrchestratorSimpleRoute:
         pipe = ReasoningPipeline(llm, on_stage=lambda sid, data: seen.append(sid))
         ctx = pipe.run("buat hello world")
 
-        assert seen == [1, 6, 10]
+        assert seen == [1, 6, 8, 10]
         assert ctx.stage_outputs[6]["code"] == "print('hi')"
         # user_request threaded into the stage prompt
         assert "buat hello world" in llm.prompts[6]

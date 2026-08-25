@@ -13,6 +13,7 @@ Failure policy:
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -26,7 +27,25 @@ from miniagent.pipeline.stages import (
 
 logger = logging.getLogger(__name__)
 
-MAX_JSON_ATTEMPTS = 2
+MAX_JSON_ATTEMPTS = 3
+RETRY_BACKOFF_SECONDS = 1.5
+
+# The stock 08_execution.md prompt was written for an architecture where the
+# model executes tools itself. MiniAgent's host executes instead, so we pin
+# the contract explicitly for that stage.
+EXECUTION_CONTRACT = """
+EXECUTION CONTRACT (overrides any conflicting instruction above):
+You CANNOT execute anything yourself. Reply with ONLY valid JSON:
+{"execution_summary": "<one line>",
+ "commands": ["<single shell command>", ...]}
+Rules for commands:
+- Max 5 commands; each must create or modify files INSIDE the workspace only.
+- Use simple POSIX-style commands (echo/cat/cp/mkdir/python) without chaining.
+- AVOID double quotes inside echo payloads (Windows cmd keeps them literally);
+  prefer: echo text without quotes > file.txt
+- Do NOT include any "commands_executed", stdout or exit codes - the host runs
+  them for real and appends actual results to the conversation afterwards.
+"""
 
 
 class PipelineStageError(RuntimeError):
@@ -77,6 +96,18 @@ class ReasoningPipeline:
             complexity=intent.get("complexity_indicator", "medium"),
             suggested=intent.get("suggested_stages"),
         )
+        # Models tend to copy the [1,6,10] example from the Intent prompt,
+        # dropping the Execution stage. When an executor is available and the
+        # task is actionable (coding/execution), force stage 8 back in before
+        # Finalization so tasks actually produce artifacts.
+        if (
+            self.executor is not None
+            and intent.get("intent_category") in ("coding", "execution")
+            and 8 not in stages
+        ):
+            insert_at = stages.index(max(stages)) if len(stages) > 1 else len(stages)
+            stages.insert(insert_at, 8)
+
         for stage_id in stages:
             if stage_id == 1:
                 continue
@@ -99,6 +130,8 @@ class ReasoningPipeline:
         # Explicit stage marker: keeps multi-stage models oriented and gives
         # test doubles a deterministic way to identify the caller.
         prompt = f"[pipeline stage {spec.id}: {spec.name}]\n\n{body}"
+        if stage_id == 8:
+            prompt += EXECUTION_CONTRACT
 
         schema_description = f"Strict JSON output for the {spec.name} stage."
         data: dict = {"_error": "unreachable"}
@@ -115,6 +148,9 @@ class ReasoningPipeline:
                 logger.warning("stage %s attempt %s failed: %s", stage_id, attempt, e)
                 data = {"_error": str(e)[:300]}
                 if attempt < MAX_JSON_ATTEMPTS:
+                    # Free-tier providers return empty/garbled responses often;
+                    # a short backoff measurably improves the retry odds.
+                    time.sleep(RETRY_BACKOFF_SECONDS * attempt)
                     prompt = prompt + "\n\nIMPORTANT: reply with ONLY valid JSON."
 
         if "_error" in data and stage_id != 1:
@@ -140,11 +176,16 @@ class ReasoningPipeline:
         from miniagent.executor.subprocess_executor import SubprocessExecutor
 
         commands: list[str] = []
-        raw = exec_data.get("commands") or exec_data.get("command")
+        raw = exec_data.get("commands") or exec_data.get("planned_commands")
         if isinstance(raw, str):
             commands = [raw.strip()]
         elif isinstance(raw, list):
-            commands = [str(c).strip() for c in raw if str(c).strip()]
+            for item in raw:
+                if isinstance(item, dict) and "command" in item:
+                    commands.append(str(item["command"]).strip())
+                elif str(item).strip():
+                    commands.append(str(item).strip())
+            commands = [c for c in commands if c]
 
         if not commands:
             exec_data["_note"] = "no commands proposed by the Execution stage"
