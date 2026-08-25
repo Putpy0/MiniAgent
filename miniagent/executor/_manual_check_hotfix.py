@@ -22,6 +22,7 @@ import tempfile
 
 sys.path.insert(0, ".")
 
+from miniagent.executor.permission import PermissionChecker
 from miniagent.executor.subprocess_executor import SubprocessExecutor
 
 
@@ -94,6 +95,28 @@ def test_6_api_key_not_leaked() -> None:
         del os.environ["FAKE_TEST_API_KEY"]
 
 
+def test_7_dd_regex_no_false_positive() -> None:
+    print("=== Test 7: dd regex - device target BLOCKED, target aman tidak ===")
+    pc = PermissionChecker()
+    # Device sebagai OUTPUT target (urutan argumen apapun) harus tetap blocked
+    assert (
+        pc.classify_command("dd if=/dev/urandom of=/dev/sda").risk_level.value == "blocked"
+    ), "GAGAL: dd of=/dev/sda seharusnya blocked"
+    assert (
+        pc.classify_command("dd of=/dev/sda if=/dev/urandom").risk_level.value == "blocked"
+    ), "GAGAL: urutan dibalik seharusnya tetap blocked"
+    assert (
+        pc.classify_command("dd if=myimage.iso of=/dev/sdb").risk_level.value
+        in ("blocked", "dangerous")
+    ), "GAGAL: dd of=/dev/sdb seharusnya blocked/dangerous"
+    # Target aman TIDAK boleh blocked (dd sendiri tetap dangerous via base list)
+    r1 = pc.classify_command("dd if=/dev/zero of=swapfile bs=1M count=1024")
+    assert r1.risk_level.value != "blocked", f"MASIH FALSE POSITIVE: {r1.risk_level.value}"
+    r2 = pc.classify_command("dd if=/dev/zero of=/dev/null")
+    assert r2.risk_level.value != "blocked", f"MASIH FALSE POSITIVE: {r2.risk_level.value}"
+    print(f"OK (swapfile -> {r1.risk_level.value}, /dev/null -> {r2.risk_level.value})")
+
+
 if __name__ == "__main__":
     test_1_import()
     test_2_trivial_command()
@@ -101,3 +124,4 @@ if __name__ == "__main__":
     test_4_path_traversal_rejected()
     test_5_command_inside_workspace_allowed()
     test_6_api_key_not_leaked()
+    test_7_dd_regex_no_false_positive()

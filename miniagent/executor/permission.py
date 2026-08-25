@@ -33,8 +33,6 @@ class PermissionChecker:
         r":\(\)\{\s*:\|:\s*&\s*\}\s*;",
         r"\(\)\s*\{\s*:\|\:&\s*\}\s*;",
         # Direct disk destruction
-        r"dd\s+if=/dev/zero",
-        r"dd\s+if=/dev/random",
         r"mkfs",
         r"mke2fs",
         r"fdisk.*-y",
@@ -45,9 +43,15 @@ class PermissionChecker:
         # Bootloader destruction
         r"update-grub.*--recheck",
         r"grub-install.*--force",
-        # CRITICAL FIX: dd to device targets
-        r"dd\s+(of=|.*\.\./|/dev/).*=",
-        r"dd\s+if=/dev/(zero|random|urandom|sd[a-z]\d+)",
+        # dd writing to a device target (any argument order), except /dev/null
+        # which is always safe to write to. Only the OUTPUT target matters:
+        # reading from /dev/zero|random|urandom is harmless data generation.
+        r"dd\s+.*\bof=(?!/dev/null\b)/dev/\S+",
+        # dd reading from a raw block device (disk/partition imaging).
+        # NOTE: /dev/zero and /dev/random source patterns were removed - they
+        # caused permanent false positives on legitimate commands such as
+        # "dd if=/dev/zero of=swapfile bs=1M count=1024".
+        r"dd\s+.*\bif=/dev/(sd[a-z]+\d*|hd[a-z]+|vd[a-z]+|nvme\d+n\d+(p\d+)?|mmcblk\d+(p\d+)?)\b",
     ]
 
     # Patterns for dangerous commands (require confirmation)
