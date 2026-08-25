@@ -35,10 +35,11 @@ executor:
   
   # Default timeout for command execution (seconds)
   timeout: 30
-  
-  # WARNING: Setting to true bypasses safety confirmations for dangerous commands
-  allow_dangerous: false
-  
+
+  # Safety: DANGEROUS commands require explicit approval through the
+  # executor's confirmation_callback; without one they fail closed.
+  # There is deliberately no global bypass option.
+
   # Log file path for execution audit trail
   log_file: ".miniagent/logs/execution.log"
 

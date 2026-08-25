@@ -85,6 +85,19 @@ class SkillInstaller:
         if branch.startswith("-"):
             return False
 
+        # Reject ref-name shapes git itself forbids (and '..' which would be a
+        # range operator even where characters are technically legal)
+        if (
+            branch in (".", "..")
+            or ".." in branch
+            or branch.endswith(".")
+            or branch.endswith(".lock")
+            or branch.endswith("/")
+            or "@{" in branch
+            or any(part.startswith(".") for part in branch.split("/"))
+        ):
+            return False
+
         # Only allow characters valid in git ref names
         return bool(re.match(r"^[A-Za-z0-9_./-]+$", branch))
 

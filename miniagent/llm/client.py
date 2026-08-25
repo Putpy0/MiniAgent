@@ -171,12 +171,20 @@ class LLMClient:
         Heuristic: an exception is considered NOT retryable (permanent) when
         its message indicates auth/config errors that will not change by
         simply retrying.
+
+        Note: the indicator list intentionally avoids a bare "not found" -
+        that phrase also appears in transient network errors (e.g. DNS
+        "Name or service not found") which SHOULD be retried. Model-not-found
+        is matched with explicit, specific phrasings instead.
         """
         error_str = str(exception).lower()
         non_retryable_indicators = [
+            # auth / credentials
             "authentication", "invalid api key", "unauthorized", "forbidden",
-            "not found", "invalid model", "invalid_api_key", "api_key",
-            "permission denied", "model_not_found",
+            "invalid_api_key", "api_key", "permission denied",
+            # model selection mistakes (specific phrasings only)
+            "model_not_found", "model not found", "no such model",
+            "unknown model", "invalid model",
         ]
         return not any(indicator in error_str for indicator in non_retryable_indicators)
 

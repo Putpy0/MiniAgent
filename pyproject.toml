@@ -47,8 +47,8 @@ docker = [
 miniagent = "miniagent.cli:app"
 
 [project.urls]
-Homepage = "https://github.com/miniagent/miniagent"
-Repository = "https://github.com/miniagent/miniagent.git"
+Homepage = "https://github.com/Putpy0/MiniAgent"
+Repository = "https://github.com/Putpy0/MiniAgent.git"
 
 [tool.setuptools.packages.find]
 where = ["."]

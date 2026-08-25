@@ -1,6 +1,7 @@
 """Skill loader for parsing SKILL.md files with YAML frontmatter."""
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -238,7 +239,18 @@ class SkillLoader:
         Raises:
             FileExistsError: If skill folder already exists
             FileNotFoundError: If template folder not found
+            ValueError: If skill_name is invalid or escapes the skills dir
         """
+        # Validate the name first: a plain folder token, no traversal,
+        # no git-ref-forbidden shapes.
+        if (
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", skill_name)
+            or ".." in skill_name
+            or skill_name.endswith(".")
+            or skill_name.endswith(".lock")
+        ):
+            raise ValueError(f"Invalid skill name: {skill_name!r}")
+
         template_path = self.skills_dir / self.TEMPLATE_FOLDER
         if not template_path.exists():
             raise FileNotFoundError(
@@ -247,6 +259,13 @@ class SkillLoader:
             )
 
         new_skill_path = self.skills_dir / skill_name
+
+        # Defense-in-depth: the resolved path must stay inside skills_dir
+        try:
+            new_skill_path.resolve().relative_to(self.skills_dir.resolve())
+        except ValueError:
+            raise ValueError(f"Skill path escapes skills directory: {skill_name!r}")
+
         if new_skill_path.exists():
             raise FileExistsError(f"Skill folder already exists: {new_skill_path}")
 

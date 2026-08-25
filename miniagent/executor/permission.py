@@ -77,10 +77,15 @@ class PermissionChecker:
         r"wget.*\|\s*python",
         # Inline code execution via interpreter/editor flags - can run
         # arbitrary logic even though the base command is otherwise safe.
+        # Covers every flag shape: "-c code", -c"code", -ccode,
+        # "--command x", "--command=x". The negative lookbehind requires the
+        # dash to follow whitespace/string-start, so a bare word like
+        # "script-c.py" does NOT match.
         # Plain usage (python script.py, vim file.txt) stays SAFE.
-        r"python3?\s+.*(-c|--command)\s+",
-        r"pip3?\s+install\s+",  # package install can run arbitrary setup.py
-        r"vim?\s+.*-c\s+",      # vi/vim command-mode execution
+        r"python3?\s+.*(?<!\S)-c",
+        r"python3?\s+.*(?<!\S)--command(?:\s|=|$)",
+        r"pip3?\s+install(?:\s|$)",  # package install can run arbitrary setup.py
+        r"vim?\s+.*(?<!\S)-c",       # vi/vim command-mode execution (any -c form)
         # Changing permissions recursively
         r"chmod\s+-R\s+777",
         r"chmod\s+-R\s+a\+rwx",
