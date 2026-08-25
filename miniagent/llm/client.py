@@ -8,7 +8,6 @@ import litellm
 from litellm import completion as litellm_completion
 
 from miniagent.config import LLMConfig
-from miniagent.llm.providers import ProviderRegistry
 
 logger = logging.getLogger(__name__)
 @dataclass
@@ -167,6 +166,20 @@ class LLMClient:
         logger.error(error_msg)
         raise RuntimeError(error_msg)
 
+    def _is_retryable_error(self, exception: Exception) -> bool:
+        """
+        Heuristic: an exception is considered NOT retryable (permanent) when
+        its message indicates auth/config errors that will not change by
+        simply retrying.
+        """
+        error_str = str(exception).lower()
+        non_retryable_indicators = [
+            "authentication", "invalid api key", "unauthorized", "forbidden",
+            "not found", "invalid model", "invalid_api_key", "api_key",
+            "permission denied", "model_not_found",
+        ]
+        return not any(indicator in error_str for indicator in non_retryable_indicators)
+
     def complete_with_retry(
         self,
         messages: list[dict[str, str]],
@@ -206,6 +219,11 @@ class LLMClient:
                 )
             except Exception as e:
                 last_exception = e
+                if not self._is_retryable_error(e):
+                    # Permanent errors (auth/config) will not succeed on retry -
+                    # fail fast instead of burning through all retry attempts
+                    logger.error(f"Non-retryable error, aborting retries: {e}")
+                    raise
                 if attempt < self.config.max_retries:
                     # Exponential backoff
                     wait_time = 2**attempt
@@ -238,7 +256,8 @@ class LLMClient:
         Returns:
             LLMResponse with assistant's reply
         """
-        messages = conversation_history or []
+        # Copy the history so the caller's list is never mutated in place
+        messages = list(conversation_history) if conversation_history else []
         messages.append({"role": "user", "content": user_message})
 
         return self.complete_with_retry(
