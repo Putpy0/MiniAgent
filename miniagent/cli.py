@@ -127,6 +127,28 @@ def skills(
     console.print(table)
 
 
+@app.command()
+def chat(
+    config_path: Path = typer.Option(
+        None,
+        "--config",
+        help="Path to config.yaml (default: $MINIAGENT_CONFIG or ./config.yaml)",
+    ),
+    workspace: Path = typer.Option(
+        None, "--workspace", help="Override the sandboxed workspace directory"
+    ),
+    model: str = typer.Option(
+        None, "--model", help="Model id override (falls back to config.llm.primary)"
+    ),
+) -> None:
+    """Interactive agent chat (REPL). The model can propose shell commands;
+    SAFE ones run automatically, DANGEROUS ask y/N, BLOCKED always refused."""
+    from miniagent.cli_chat import ChatSession
+
+    session = ChatSession(config_path=config_path, workspace=workspace, model=model)
+    session.run_repl()
+
+
 def main() -> None:  # entry point target
     app()
 
