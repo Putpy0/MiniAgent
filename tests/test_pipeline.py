@@ -28,7 +28,8 @@ class FakeLLM:
     def generate_json(self, prompt, schema_description=None, system_prompt=None, **kw):
         # The orchestrator prefixes every prompt with "[pipeline stage N: name]"
         for sid in range(1, 11):
-            if f"[pipeline stage {sid}" in prompt:
+            marker = f"[pipeline stage {sid}:"
+            if marker in prompt:
                 self.prompts[sid] = prompt
                 out = self.scripted.get(sid, {"ok": True})
                 if isinstance(out, Exception):
