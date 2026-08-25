@@ -117,6 +117,18 @@ def test_7_dd_regex_no_false_positive() -> None:
     print(f"OK (swapfile -> {r1.risk_level.value}, /dev/null -> {r2.risk_level.value})")
 
 
+def test_8_backslash_traversal_rejected() -> None:
+    print("=== Test 8: relative backslash traversal HARUS ditolak ===")
+    with tempfile.TemporaryDirectory() as ws:
+        ex = SubprocessExecutor(workspace_root=ws)
+        for probe in ("cat ..\\..\\outside_secret.txt", "cat ../../outside_secret.txt"):
+            try:
+                r = ex.run_command(probe, timeout=3)
+                print(f"GAGAL: {probe!r} dieksekusi (exit={r.exit_code})")
+            except PermissionError as e:
+                print(f"OK - {probe!r} ditolak:", str(e)[:60])
+
+
 if __name__ == "__main__":
     test_1_import()
     test_2_trivial_command()
@@ -125,3 +137,4 @@ if __name__ == "__main__":
     test_5_command_inside_workspace_allowed()
     test_6_api_key_not_leaked()
     test_7_dd_regex_no_false_positive()
+    test_8_backslash_traversal_rejected()

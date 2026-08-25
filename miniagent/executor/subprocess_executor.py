@@ -212,6 +212,13 @@ class SubprocessExecutor(Executor):
             for match in re.findall(r"[A-Za-z]:[\\/][^\s\"']*", command):
                 if match not in path_candidates:
                     path_candidates.append(match)
+            # Relative backslash traversal: POSIX shlex strips backslashes,
+            # turning "..\\..\\file" into separate tokens ("..", "..", "file")
+            # that extract_path_like_arguments excludes. Scan the raw command
+            # so dot-dot/backslash sequences cannot bypass containment.
+            for match in re.findall(r"\.\.(?:[\\/][^\s\"'&;|]*)*", command):
+                if match not in path_candidates:
+                    path_candidates.append(match)
             for candidate in path_candidates:
                 candidate_expanded = os.path.expanduser(candidate)
                 if os.path.isabs(candidate_expanded):
