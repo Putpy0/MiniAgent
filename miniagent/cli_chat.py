@@ -314,31 +314,39 @@ class ChatSession:
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(workspace=self.workspace.resolve())
         trimmed = self.history[-MAX_HISTORY_MESSAGES:]
 
+        chunks: list[str] = []
         try:
-            with self.console.status("[dim]berpikir...[/dim]"):
-                response = self.client.chat(
-                    user_text,
-                    conversation_history=trimmed,
-                    system_prompt=system_prompt,
-                )
+            self.console.print(f"[dim]{_safe(self.model)}[/dim]")
+            for delta in self.client.chat_stream(
+                user_text,
+                conversation_history=trimmed,
+                system_prompt=system_prompt,
+            ):
+                chunks.append(_safe(delta))
+                self.console.out(chunks[-1], end="")
+            self.console.print("\n")
         except Exception as e:
-            self.console.print("[red]Permintaan gagal:[/red] " + _safe(str(e))[:160])
-            if self._probe_free_models():
-                # Model pengganti siap - retry the same message once.
-                return self._handle_turn(user_text)
-            return
+            if not chunks:
+                # Nothing streamed yet - treat as a normal failure so the
+                # free-model fallback logic can kick in.
+                self.console.print("[red]Permintaan gagal:[/red] " + _safe(str(e))[:160])
+                if self._probe_free_models():
+                    return self._handle_turn(user_text)
+                return
+            self.console.print(
+                "\n[red][stream terputus: " + _safe(str(e))[:80] + "][/red]"
+            )
 
-        content = response.content.strip()
+        content = "".join(chunks).strip()
+        if not content:
+            self.console.print("[yellow](jawaban kosong dari model)[/yellow]")
+            return
         self.history.extend(
             [
                 {"role": "user", "content": user_text},
                 {"role": "assistant", "content": content},
             ]
         )
-        usage = response.usage or {}
-        tokens = usage.get("total_tokens", "?")
-        title = _safe(response.provider) + f" | {tokens} tok"
-        self.console.print(Panel(_safe(content), title=title, border_style="blue"))
 
         commands = parse_run_blocks(content)
         if not commands:

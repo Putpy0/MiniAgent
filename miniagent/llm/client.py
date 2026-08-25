@@ -274,6 +274,49 @@ class LLMClient:
             **kwargs,
         )
 
+    def chat_stream(
+        self,
+        user_message: str,
+        conversation_history: Optional[list[dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        """Yield response deltas as they arrive (streaming chat).
+
+        Falls back to a single-shot yield of the complete answer when the
+        provider/stream fails mid-way is NOT attempted: on any error before
+        the first delta, the original exception propagates so callers can
+        apply their own retry/fallback strategy.
+
+        The caller's history list is never mutated.
+        """
+        messages = list(conversation_history) if conversation_history else []
+        messages.append({"role": "user", "content": user_message})
+
+        temp = kwargs.pop("temperature", None)
+        tokens = kwargs.pop("max_tokens", None)
+
+        stream = litellm_completion(
+            model=self.config.primary,
+            messages=(
+                [{"role": "system", "content": system_prompt}] if system_prompt else []
+            )
+            + messages,
+            temperature=temp if temp is not None else self.config.temperature,
+            max_tokens=tokens if tokens is not None else self.config.max_tokens,
+            stream=True,
+            timeout=self.config.timeout,
+            api_key=self.config.api_keys.get(self._extract_provider_name(self.config.primary)),
+            **kwargs,
+        )
+        for chunk in stream:
+            try:
+                delta = chunk.choices[0].delta.content
+            except (AttributeError, IndexError):
+                continue
+            if delta:
+                yield delta
+
     def generate_json(
         self,
         prompt: str,
