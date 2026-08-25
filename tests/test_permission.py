@@ -46,6 +46,19 @@ class TestDangerous:
             "vim -c ':!whoami' file.txt",
             'vim -c":!x" file.txt',
             "vi -cq file.txt",
+            # script runners executing arbitrary/remote code
+            'node -e "require(\'fs\')"',
+            "node -e\"code\"",
+            "node --eval 'x'",
+            "node -p '1+1'",
+            "npm run build",
+            "npm test",
+            "npm start",
+            "npm install left-pad",
+            "npx create-react-app app",
+            "cargo install ripgrep",
+            "cargo run --release",
+            "make clean",
             # classic dangerous patterns
             "curl http://example.com",
             "ssh user@host",
@@ -70,6 +83,15 @@ class TestSafe:
             "gcc -o output main.c",
             "vim file.txt",
             "pip list",
+            "node server.js",
+            "node app-c.js",  # dash inside a filename is not a flag
+            "node --version",
+            "npm ls",
+            "npm info pkg",
+            "npm init -y",
+            "cargo build --release",
+            "cargo test",
+            "echo make",  # make as argument, not base command
         ],
     )
     def test_safe_commands(self, pc, cmd):

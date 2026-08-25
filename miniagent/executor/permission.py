@@ -86,6 +86,13 @@ class PermissionChecker:
         r"python3?\s+.*(?<!\S)--command(?:\s|=|$)",
         r"pip3?\s+install(?:\s|$)",  # package install can run arbitrary setup.py
         r"vim?\s+.*(?<!\S)-c",       # vi/vim command-mode execution (any -c form)
+        # Script runners / package managers that execute arbitrary or remote
+        # code through arguments or lifecycle scripts.
+        r"node\s+.*(?<!\S)(-[ep]\b|--eval\b|--print\b)",  # node inline eval
+        r"npm\s+(?:run|test|start)\b",   # executes package.json scripts
+        r"npm\s+(?:i|install|ci)\b",     # install lifecycle scripts can run code
+        r"npx\s+",                       # downloads and executes packages
+        r"cargo\s+(?:install|run)\b",    # build scripts / compiled binary exec
         # Changing permissions recursively
         r"chmod\s+-R\s+777",
         r"chmod\s+-R\s+a\+rwx",
@@ -164,6 +171,8 @@ class PermissionChecker:
         "chown", "mv", "cp", "mkdir", "touch", "rmdir", "dd", "mkfs", "fdisk",
         "parted", "iptables", "systemctl", "service", "apt", "yum", "dnf",
         "pacman", "zypper", "env", "printenv",
+        # make executes arbitrary shell recipes from any Makefile it finds
+        "make",
     }
 
     # CAUTION commands
