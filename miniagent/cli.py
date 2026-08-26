@@ -164,6 +164,7 @@ def pipeline(
         None, "--workspace", help="Sandboxed workspace for the Execution stage"
     ),
     model: str = typer.Option(None, "--model", help="Model id override"),
+    dump: Path = typer.Option(None, "--dump", help="Write full stage outputs JSON to this path"),
 ) -> None:
     """Run the 10-stage reasoning pipeline on a task.
 
@@ -262,6 +263,9 @@ def pipeline(
     fin = ctx.get_output(10)
     summary = fin.get("summary") or json.dumps(fin, ensure_ascii=False)[:400]
     console.print(Panel.fit(_safe(summary), title=f"selesai | {len(ctx.stage_outputs)} stage", border_style="cyan"))
+    if dump:
+        dump.write_text(json.dumps(ctx.stage_outputs, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        console.print(f"[dim]stage outputs ditulis ke {dump}[/dim]")
 
 
 def main() -> None:  # entry point target

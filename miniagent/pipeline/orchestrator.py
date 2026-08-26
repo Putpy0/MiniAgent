@@ -35,14 +35,22 @@ RETRY_BACKOFF_SECONDS = 1.5
 # the contract explicitly for that stage.
 EXECUTION_CONTRACT = """
 EXECUTION CONTRACT (overrides any conflicting instruction above):
-You CANNOT execute anything yourself. Reply with ONLY valid JSON:
+You CANNOT execute anything yourself, and NOTHING has run yet - earlier
+stages only planned/wrote code as text. If the task creates or modifies
+files, YOUR commands must do it for real.
+
+Reply with ONLY valid JSON:
 {"execution_summary": "<one line>",
  "commands": ["<single shell command>", ...]}
-Rules for commands:
-- Max 5 commands; each must create or modify files INSIDE the workspace only.
+
+Example:
+{"execution_summary": "create greeting file",
+ "commands": ["echo hello world > greeting.txt", "cat greeting.txt"]}
+
+Rules:
+- Max 5 commands; each must create/modify/verify files INSIDE the workspace.
 - Use simple POSIX-style commands (echo/cat/cp/mkdir/python) without chaining.
-- AVOID double quotes inside echo payloads (Windows cmd keeps them literally);
-  prefer: echo text without quotes > file.txt
+- AVOID double quotes inside echo payloads (Windows cmd keeps them literally).
 - Do NOT include any "commands_executed", stdout or exit codes - the host runs
   them for real and appends actual results to the conversation afterwards.
 """
@@ -60,7 +68,7 @@ class ReasoningPipeline:
         executor=None,  # SubprocessExecutor-like; enables stage 8 execution
         confirmation_callback: Optional[Callable[[str, str], bool]] = None,
         on_stage: Optional[Callable[[int, dict], None]] = None,
-        max_tokens_per_stage: int = 1200,
+        max_tokens_per_stage: int = 2400,
     ):
         self.client = llm_client
         self.prompts_dir = Path(prompts_dir) if prompts_dir else None
@@ -176,7 +184,11 @@ class ReasoningPipeline:
         from miniagent.executor.subprocess_executor import SubprocessExecutor
 
         commands: list[str] = []
-        raw = exec_data.get("commands") or exec_data.get("planned_commands")
+        raw = (
+            exec_data.get("commands")
+            or exec_data.get("planned_commands")
+            or exec_data.get("command")
+        )
         if isinstance(raw, str):
             commands = [raw.strip()]
         elif isinstance(raw, list):
@@ -186,6 +198,13 @@ class ReasoningPipeline:
                 elif str(item).strip():
                     commands.append(str(item).strip())
             commands = [c for c in commands if c]
+
+        if not commands and isinstance(exec_data.get("commands_executed"), list):
+            # Model followed the legacy report-shaped schema; treat each
+            # reported entry as the command the host should actually run.
+            for item in exec_data["commands_executed"]:
+                if isinstance(item, dict) and str(item.get("command", "")).strip():
+                    commands.append(str(item["command"]).strip())
 
         if not commands:
             exec_data["_note"] = "no commands proposed by the Execution stage"
