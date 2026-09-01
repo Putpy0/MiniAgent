@@ -94,6 +94,24 @@ def load_api_key(config_path: Optional[Path]) -> tuple[Optional[str], str]:
     return None, ""
 
 
+def find_working_free_model(llm_config):
+    """Probe FREE_MODEL_CANDIDATES with a tiny request; return first that
+    works, else None. Used by the chat REPL and the pipeline command."""
+    from miniagent.llm.client import LLMClient
+
+    for candidate in FREE_MODEL_CANDIDATES:
+        try:
+            probe_cfg = llm_config.model_copy(
+                update={"primary": candidate, "fallback": [], "max_retries": 0, "max_tokens": 16}
+            )
+            r = LLMClient(config=probe_cfg).chat("Balas satu kata: siap")
+            if r.content.strip():
+                return candidate
+        except Exception as e:
+            Console().print(f"  [dim]{_safe(candidate)}: {_safe(str(e))[:80]}[/dim]")
+    return None
+
+
 class ChatSession:
     def __init__(
         self,
@@ -160,21 +178,11 @@ class ChatSession:
             return False
         self._probed_fallback = True
         self.console.print("[yellow]Model utama gagal - mencoba kandidat model gratis...[/yellow]")
-        for candidate in FREE_MODEL_CANDIDATES:
-            try:
-                probe_cfg = self.config.llm.model_copy(
-                    update={"primary": candidate, "fallback": [], "max_retries": 0, "max_tokens": 16}
-                )
-                from miniagent.llm.client import LLMClient
-
-                probe = LLMClient(config=probe_cfg)
-                r = probe.chat("Balas satu kata: siap")
-                if r.content.strip():
-                    self.console.print(f"[green]Menggunakan model gratis:[/green] {candidate}")
-                    self._build_client(candidate)
-                    return True
-            except Exception as e:
-                self.console.print(f"  [dim]{_safe(candidate)}: {_safe(str(e))[:80]}[/dim]")
+        winner = find_working_free_model(self.config.llm)
+        if winner:
+            self.console.print(f"[green]Menggunakan model gratis:[/green] {winner}")
+            self._build_client(winner)
+            return True
         return False
 
     # ---------- tool execution ----------
@@ -314,31 +322,39 @@ class ChatSession:
         system_prompt = SYSTEM_PROMPT_TEMPLATE.format(workspace=self.workspace.resolve())
         trimmed = self.history[-MAX_HISTORY_MESSAGES:]
 
+        chunks: list[str] = []
         try:
-            with self.console.status("[dim]berpikir...[/dim]"):
-                response = self.client.chat(
-                    user_text,
-                    conversation_history=trimmed,
-                    system_prompt=system_prompt,
-                )
+            self.console.print(f"[dim]{_safe(self.model)}[/dim]")
+            for delta in self.client.chat_stream(
+                user_text,
+                conversation_history=trimmed,
+                system_prompt=system_prompt,
+            ):
+                chunks.append(_safe(delta))
+                self.console.out(chunks[-1], end="")
+            self.console.print("\n")
         except Exception as e:
-            self.console.print("[red]Permintaan gagal:[/red] " + _safe(str(e))[:160])
-            if self._probe_free_models():
-                # Model pengganti siap - retry the same message once.
-                return self._handle_turn(user_text)
-            return
+            if not chunks:
+                # Nothing streamed yet - treat as a normal failure so the
+                # free-model fallback logic can kick in.
+                self.console.print("[red]Permintaan gagal:[/red] " + _safe(str(e))[:160])
+                if self._probe_free_models():
+                    return self._handle_turn(user_text)
+                return
+            self.console.print(
+                "\n[red][stream terputus: " + _safe(str(e))[:80] + "][/red]"
+            )
 
-        content = response.content.strip()
+        content = "".join(chunks).strip()
+        if not content:
+            self.console.print("[yellow](jawaban kosong dari model)[/yellow]")
+            return
         self.history.extend(
             [
                 {"role": "user", "content": user_text},
                 {"role": "assistant", "content": content},
             ]
         )
-        usage = response.usage or {}
-        tokens = usage.get("total_tokens", "?")
-        title = _safe(response.provider) + f" | {tokens} tok"
-        self.console.print(Panel(_safe(content), title=title, border_style="blue"))
 
         commands = parse_run_blocks(content)
         if not commands:

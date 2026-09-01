@@ -1,6 +1,7 @@
 """LLM client with multi-provider support and automatic fallback."""
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -274,6 +275,49 @@ class LLMClient:
             **kwargs,
         )
 
+    def chat_stream(
+        self,
+        user_message: str,
+        conversation_history: Optional[list[dict[str, str]]] = None,
+        system_prompt: Optional[str] = None,
+        **kwargs: Any,
+    ):
+        """Yield response deltas as they arrive (streaming chat).
+
+        Falls back to a single-shot yield of the complete answer when the
+        provider/stream fails mid-way is NOT attempted: on any error before
+        the first delta, the original exception propagates so callers can
+        apply their own retry/fallback strategy.
+
+        The caller's history list is never mutated.
+        """
+        messages = list(conversation_history) if conversation_history else []
+        messages.append({"role": "user", "content": user_message})
+
+        temp = kwargs.pop("temperature", None)
+        tokens = kwargs.pop("max_tokens", None)
+
+        stream = litellm_completion(
+            model=self.config.primary,
+            messages=(
+                [{"role": "system", "content": system_prompt}] if system_prompt else []
+            )
+            + messages,
+            temperature=temp if temp is not None else self.config.temperature,
+            max_tokens=tokens if tokens is not None else self.config.max_tokens,
+            stream=True,
+            timeout=self.config.timeout,
+            api_key=self.config.api_keys.get(self._extract_provider_name(self.config.primary)),
+            **kwargs,
+        )
+        for chunk in stream:
+            try:
+                delta = chunk.choices[0].delta.content
+            except (AttributeError, IndexError):
+                continue
+            if delta:
+                yield delta
+
     def generate_json(
         self,
         prompt: str,
@@ -329,5 +373,50 @@ class LLMClient:
 
         try:
             return json.loads(content)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON response: {e}") from e
+        except json.JSONDecodeError as direct_error:
+            parsed = _extract_first_json_object(content)
+            if parsed is not None:
+                return parsed
+            raise ValueError(f"Invalid JSON response: {direct_error}") from direct_error
+
+
+def _extract_first_json_object(text: str) -> Optional[dict[str, Any]]:
+    """Best-effort recovery: find the first balanced {...} block and parse it.
+
+    Handles reasoning models that prefix answers with <think>...</think> or
+    stray prose, and trailing commentary after the JSON object.
+    """
+    import json
+
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL)
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        in_string = False
+        escaped = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : i + 1]
+                    try:
+                        obj = json.loads(candidate)
+                        if isinstance(obj, dict):
+                            return obj
+                    except json.JSONDecodeError:
+                        break
+        start = text.find("{", start + 1)
+    return None
